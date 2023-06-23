@@ -1,0 +1,8 @@
+fastapi>=0.68.0,<0.69.0
+pydantic>=1.8.0,<2.0.0
+uvicorn>=0.15.0,<0.16.0
+alembic>=1.6.5,<1.11.1
+SQLAlchemy>=1.4.20,<2.0.16
+psycopg2>=2.9.1,<2.9.6
+python-dotenv>=0.18.0,<1.0.0
+FastAPI-SQLAlchemy==0.2.1

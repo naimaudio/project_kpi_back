@@ -1,0 +1,53 @@
+version: '3'
+
+services:
+  pgadmin:
+    container_name: "pgadmin"
+    image: dpage/pgadmin4
+    ports:
+      - "5050:5050"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    depends_on:
+      - db
+
+  db:
+    container_name: "postgresql_db"
+    image: postgres
+    restart: always
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=hours_test
+    volumes:
+      - /var/lib/pgsql/data:/var/lib/pgsql/data
+
+  app:
+    container_name: "app"
+    build: ./backend/
+    volumes:
+      - ./backend:/code
+    ports:
+      - "8080:80"
+    restart: always
+    depends_on:
+      - db
+
+  frontend:
+    container_name: "frontend"
+    build: ./frontend/
+    ports:
+      - "443:4173"
+  
+
+
+ 
+
+
+  
+
+
+
