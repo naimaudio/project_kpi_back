@@ -15,5 +15,4 @@ To fetch the lastest version of the frontend, rebuild and launch again the front
 ```
 
 
-
-In this sta
+The "update-frontend" script in ```scripts/update-frontend.bash``` is used to update the frontend to the lastest version in the branch Master and launch it again.
