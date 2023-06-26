@@ -14,5 +14,4 @@
 .python_history
 .bash_logout
 backend/fastapi
-backend/__pycache__
-backend/alembic/__pycache__
+**/__pycache__
