@@ -17,13 +17,13 @@ class HoursUser(Base):
 class Project(Base):
     __tablename__ = "project"
 
-    id = Column(Integer, primary_key=True, index=True)
-    division = Column(String, index=True)
-    classification = Column(String, index=True)
-    type = Column(Boolean)
-    name = Column(String, index=True)
-    capitalization = Column(Boolean)
-    entity = Column(Boolean)
+    id = Column(Integer,primary_key=True, index=True)
+    division = Column(String, index=True,nullable=False)
+    classification = Column(String, index=True,nullable=False)
+    type = Column(Boolean,nullable=False)
+    name = Column(String, index=True,nullable=False)
+    capitalization = Column(Boolean,nullable=False)
+    entity = Column(Boolean,nullable=False)
 
 class Register(Base):
     __tablename__ = "register"

@@ -4,14 +4,12 @@ class HoursUser(BaseModel):
     email: str
     username: str
     password: str
-    id : int
-
+    
     class Config:
             orm_mode = True
 
 
 class Project (BaseModel):
-     id: int
      division:  str
      classification: str
      type: bool
