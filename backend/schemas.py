@@ -1,5 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel
+from typing import Optional, Union
+from pydantic import BaseModel, validator
 from datetime import date
 
 class HoursUserBase(BaseModel):
@@ -29,7 +29,7 @@ class HoursUser(HoursUserBase):
 
 
 class Project (BaseModel):
-    id: Optional[int] 
+    id: Optional[int]
     entity: str
     division: str
     sub_category: str
@@ -38,12 +38,16 @@ class Project (BaseModel):
     project_name: str
     project_code: str
     project_manager: Optional[str]
-    current_phase: Optional[str]
-    complexity: Optional[int] 
-    capitalization: bool
+    complexity: Optional[int]
+    start_cap_date: Optional[date]
+    end_cap_date: Optional[date]
+    start_date: Optional[date]
+    end_date: Optional[date]
 
     class Config:
           orm_mode = True
+
+
 
 
 class Record (BaseModel):
@@ -56,7 +60,13 @@ class Record (BaseModel):
 
 class RecordProjects (BaseModel):
     project_id: int
-    declared_hours: int
+    declared_hours: float
+
+    @validator('declared_hours')
+    def validate_half_1(cls,value):
+        if not isinstance(value, int) and not (str(value).endswith('.5') or str(value).endswith('.0')):
+              raise ValueError (f"Invalid value {value}. Only integers or half numbers allowed.")
+        return value
 
     class Config:
         orm_mode = True
@@ -73,5 +83,36 @@ class BufferDailyRegister(BaseModel):
     user_id: int
     day_date: date
     project_id: int
-    daily_hours: int
+    daily_hours: float
 
+    @validator('daily_hours')
+    def validate_half_2(cls,value):
+        if not isinstance(value, int) and not (str(value).endswith('.5') or str(value).endswith('.0')):
+              raise ValueError ("Invalid value. Only integers or half numbers allowed.")
+        return value
+
+class FrontendProjectPhase(BaseModel):
+    project_phase: int
+    start_date: date
+    end_date: date
+    
+class ProjectPhase(FrontendProjectPhase):
+    
+    project_id: int
+    end_date: date
+    hours: float
+    records: int
+
+
+class MonthlyModifiedHours(BaseModel):
+    user_id : int
+    user_name: Optional[str]
+    hours: list
+
+
+class MonthlyForecast(BaseModel):
+        
+    project_id: Optional[int]
+    month: int
+    year: int
+    hours: float

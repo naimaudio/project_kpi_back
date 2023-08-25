@@ -9,3 +9,8 @@ FastAPI-SQLAlchemy==0.2.1
 PyJWT>=2.4.0
 aiofiles>=0.8.0
 python-multipart>=0.0.5
+python-jose>=3.3.0
+requests>=2.27.1
+cryptography>=40.0.2 
+pycparser>=2.21
+asyncpg>=0.27

@@ -6,10 +6,29 @@ services:
     image: dpage/pgadmin4
     environment:
       - PGADMIN_DEFAULT_EMAIL=d.sierra@focal.com
-      - PGADMIN_DEFAULT_PASSWORD=unmotdepassefocal
+      - PGADMIN_DEFAULT_PASSWORD=projecthours
       - PGADMIN_LISTEN_PORT=8091
     network_mode: host
 
+  backend-prod:
+    container_name: "backend-prod"
+    build:
+      context: ./backend/
+      dockerfile: "./Dockerfile"
+    volumes:
+      - ./backend:/code
+    restart: always
+    ports:
+    - 8080:8080
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.fastapi.rule=Host(`project-kpi.focal-naim.com`)
+      - traefik.http.routers.fastapi.tls=true
+      - traefik.http.routers.fastapi.tls.certresolver=letsencryptresolver
+    expose:  # new
+      - 8080
+    dns:
+      - 192.168.14.33
   app:
     container_name: "app"
     build: ./backend/
@@ -30,5 +49,26 @@ services:
 
   frontend:
     container_name: "frontend"
-    build: ./frontend/
+    build:
+      context: .
+      dockerfile: "./frontend/Dockerfile"
     network_mode: host
+    volumes:
+      - ./frontend/:/frontend
+      - /frontend/node_modules
+      - /frontend/dist
+
+  reverse-proxy:
+    # Enables the web UI and tells Traefik to listen to docker
+    image: traefik:v2.9.6
+    network_mode: host
+    ports:
+      # The HTTP port
+      - "8082"
+      - "8084"
+    volumes:
+      # So that Traefik can listen to the Docker events
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "./traefik.prod.toml:/etc/traefik/traefik.toml"
+      - ./certificates:/certificates
+
