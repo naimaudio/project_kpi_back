@@ -15,3 +15,7 @@
 .bash_logout
 backend/fastapi
 **/__pycache__
+/certificates
+.console-ninja
+.local
+.rnd

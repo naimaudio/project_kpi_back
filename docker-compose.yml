@@ -26,23 +26,6 @@ services:
       - traefik.http.routers.fastapi.tls=true
     expose:  # new
       - 8080
-  app:
-    container_name: "app"
-    build: ./backend/
-    volumes:
-      - ./backend:/code
-    restart: always
-    network_mode: host
-
-  backend-dev:
-    container_name: "backend-dev"
-    build:
-      context: ./backend/
-      dockerfile: "./dockerfile-dev/Dockerfile"
-    volumes:
-      - ./backend:/code
-    restart: always
-    network_mode: host
 
   frontend:
     container_name: "frontend"
