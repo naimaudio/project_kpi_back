@@ -9,20 +9,33 @@ FOCAL requires to monitor the amount of hours worked in each of their projects. 
 
 - Input of working hours with a given frequency (mostly weekly but can be daily as well) for Employee, Project Manager and Business Manager roles
 - Key Performance Indicators for Project Manager and Business Manager roles
-- Alter of inputted hours for Business Manager role
+- Alter of inputted hours (weekly for Project Manager and monthly for Business Manager)
 
 For managing this data, a database called "project_kpi" is then created with the following tables:
 
 * Hours User (_hoursuser_): a table containing the information of every user in the FOCAL roster. Column fields include:
+    + Id (_id_): unique id for identifying each user
     + User name (_username_): complete name of every user
     + Email (_email_): corporate email for each user
-    + Password (_password_): encoded password for each user
-    + Division (_division_): dependency on which each user works. ***Where and how to reference all the divisions?***
-    + Role (_role_): role that each employee holds in the company ***Where and how to reference the roles?***
+    + Domain (_domain_): dependency on which each user works. Possible domains include: Mechanics, Hardware, Software, Acoutics, Tests and Project Management.
+    + Role (_role_): profile for the current user. Possible profiles include: Employee, Project Manager and Business Manager.
     + View (_view_): the current view for inputting hours (daily or weekly)
 
 * Project (_project_): contains every project FOCAL is interested in tracking. Column fields include:
-    ...
+    + Id (_id_): unique id for identifying each project
+    + Entity (_username_): complete name of every user
+    + Division (_email_): corporate email for each user
+    + Sub-category (_domain_): dependency on which each user works. Possible domains include: Mechanics, Hardware, Software, Acoutics, Tests and Project Management.
+    + Classification (_role_): profile for the current user. Possible profiles include: Employee, Project Manager and Business Manager.
+    + Type (_view_): the current view for inputting hours (daily or weekly)
+    + Project name
+    + Project code
+    + Project manager
+    + Complexity
+    + Start capitalization date:
+    + End capitalization date:
+    + Start date:
+    + End date:
 
 * Favorites (_favorites_): a table containing the favorite projects for each user. Column fields include:
     ...

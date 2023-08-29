@@ -2,6 +2,22 @@
 Hours KPI Project
 ============================================
 
+To setup the stack :
+
+# Setup
+
+In ```/certifications``` : 
+- Place the certificates for the frontend and backend
+
+## Env variables
+
+
+# Execution
+
+# AZURE Application declaration
+
+============================================
+
 To execute the stack :
 
 ```bash
@@ -14,8 +30,9 @@ To fetch the lastest version of the frontend, rebuild and launch again the front
 ./scripts/update-frontend
 ```
 
-
 The "update-frontend" script in ```scripts/update-frontend.bash``` is used to update the frontend to the lastest version in the branch Master and launch it again.
+
+If it doesn't work, it means that it remains eslint or type errors in frontend code. (if it remains errors the build will not be successfull)
 
 # How to change ports
 

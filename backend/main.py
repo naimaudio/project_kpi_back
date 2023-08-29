@@ -1,25 +1,32 @@
-from typing import Union, Annotated, Optional
+#General library imports
+from typing import Union, Annotated, Optional, List
 import json
 import base64
 import os
 import uvicorn
+import datetime
+from datetime import date, timedelta
+import csv
+import aiofiles
+import requests
+
+#Import FastAPI dependencies
 from fastapi import Depends, FastAPI , HTTPException, File, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_sqlalchemy import DBSessionMiddleware,db
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import FileResponse, JSONResponse
+
+#Import SQLAlchemy dependencies
 from sqlalchemy import func, desc, text, asc, case, Date, and_, or_
-from typing import List
-import datetime
-from datetime import date, timedelta
-import csv
-import aiofiles
+
+
+#Import libraries for token decryption
 from jose import jwt, jws, jwk
-import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-
+#Import schemas from schemas.py
 from schemas import HoursUserBase as SchemaHoursUserBase
 from schemas import HoursUser as SchemaHoursUser
 from schemas import BufferDailyRegister as SchemaBufferDailyRegister
@@ -32,6 +39,7 @@ from schemas import FrontendProjectPhase as SchemaProjectPhase
 from schemas import MonthlyModifiedHours as SchemaMonthlyModifiedHours
 from schemas import MonthlyForecast as SchemaMonthlyForecast
 
+#Import models from models.py
 from models import HoursUser as ModelHoursUser
 from models import Project as ModelProject
 from models import Record as ModelRecord
@@ -44,6 +52,8 @@ from models import MonthlyForecast as ModelMonthlyForecast
 
 from database import SessionLocal
 from dotenv import load_dotenv
+
+
 load_dotenv(".env")
 DISCOVERY_URL = os.getenv("DISCOVERY_URL")
 
@@ -52,9 +62,7 @@ app = FastAPI()
 
 # Fetch the Azure public key
 def get_azure_public_key():
-    
-    
-    response=requests.get("https://login.microsoftonline.com/b6f16051-d990-480e-aa66-f95b1033a52b/.well-known/openid-configuration")
+    response=requests.get(DISCOVERY_URL)
     if response.status_code == 200:
          data = response.json()
          print(data)
@@ -72,17 +80,7 @@ def get_db():
     finally:
         db.close()
 
-def _b64_decode(data):
-    data += '=' * (4 - len(data) % 4)
-    return base64.b64decode(data).decode('utf-8')
 
-def jwt_payload_decode(jwt):
-    _, payload, _ = jwt.split('.')
-    return json.loads(_b64_decode(payload))
-
-def jwt_header_decode(jwt):
-    header, _, _ = jwt.split('.')
-    return json.loads(_b64_decode(header))
 
 # Middlewares
 origins = ["*"]
@@ -128,7 +126,7 @@ def wrap_jwk_public_key(jwk):
 
 # Authentication Middleware
 async def test_auth (token: str = Depends(oauth2_scheme)):
-    response=requests.get("https://login.microsoftonline.com/b6f16051-d990-480e-aa66-f95b1033a52b/.well-known/openid-configuration")
+    response=requests.get(DISCOVERY_URL)
     data = response.json()
     public_keys_uri = data
     public_keys = requests.get(public_keys_uri["jwks_uri"]).json()
@@ -1396,7 +1394,8 @@ async def see_data(month1: Optional[int] = None,
             "year":year,
             "name":row.name,
             "email":row.email,
-            "hours":row.hours
+            "hours":row.hours,
+            "id":row.id,
         }
         
         ans.append(db_row)
@@ -1470,12 +1469,14 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
                 ModelMonthlyModifiedHours.user_id==user_id).first()
             
             if not searched_record:
+                user=db.session.query(ModelMonthlyModifiedHours).filter(ModelMonthlyModifiedHours.user_id==user_id).first()
+                
                 db_monthlyhour = ModelMonthlyModifiedHours(
                     user_id = user_id,
                     project_id = project["project_id"],
                     month = dateM,
                     total_hours = project["hours"],
-                    domain = change.domain
+                    domain = user["domain"]
                 )
         
                 db.session.add(db_monthlyhour)
@@ -2264,8 +2265,21 @@ def convert_to_seconddaystr(input_date):
     output_date = f"{parts[0]}-{parts[1]}-02"
     return output_date
 
+def _b64_decode(data):
+    data += '=' * (4 - len(data) % 4)
+    return base64.b64decode(data).decode('utf-8')
 
-#add: change monthly hours from csv
+def jwt_payload_decode(jwt):
+    _, payload, _ = jwt.split('.')
+    return json.loads(_b64_decode(payload))
+
+def jwt_header_decode(jwt):
+    header, _, _ = jwt.split('.')
+    return json.loads(_b64_decode(header))
+
+
+
+#add: change monthly hours from csv. Made for one-time convenience; no need for implementation.
 @app.put("/api/import-csv-monthly")
 async def import_csv_monthly(file: UploadFile = File(...)):
     
