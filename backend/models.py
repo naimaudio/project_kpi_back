@@ -61,6 +61,7 @@ class RecordProjects(Base):
     date_rec = Column(DateTime,nullable=False)
     project_id = Column(Integer, ForeignKey("project.id"))
     declared_hours = Column(Numeric(precision=3,scale=1),nullable=False)
+    domain = Column(String)
     
     
     __table_args__ = (ForeignKeyConstraint(['user_id', 'date_rec'], ['record.user_id', 'record.date_rec']),
@@ -83,6 +84,7 @@ class MonthlyModifiedHours(Base):
     project_id = Column(Integer, ForeignKey("project.id"), primary_key = True)
     month = Column(DateTime,nullable=False, primary_key = True)
     total_hours = Column(Numeric(precision=3,scale=1))
+    domain = Column(String, nullable=False)
 
 class MonthlyForecast(Base):
     __tablename__ = "monthly_forecast"
@@ -99,3 +101,4 @@ class Favorites(Base):
         
     project_id = Column(Integer, ForeignKey("project.id"))
     user_id = Column(Integer, ForeignKey("hoursuser.id"))
+    

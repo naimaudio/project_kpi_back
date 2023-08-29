@@ -61,6 +61,7 @@ class Record (BaseModel):
 class RecordProjects (BaseModel):
     project_id: int
     declared_hours: float
+    domain: str
 
     @validator('declared_hours')
     def validate_half_1(cls,value):
@@ -107,6 +108,7 @@ class ProjectPhase(FrontendProjectPhase):
 class MonthlyModifiedHours(BaseModel):
     user_id : int
     user_name: Optional[str]
+    domain: str
     hours: list
 
 

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi_sqlalchemy import DBSessionMiddleware,db
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import func, desc, text, asc, case, Date
+from sqlalchemy import func, desc, text, asc, case, Date, and_, or_
 from typing import List
 import datetime
 from datetime import date, timedelta
@@ -228,7 +228,7 @@ async def get_user_ID(user: SchemaHoursUserBase = Depends(get_user)):
 
 # 1.3 Insert record /*/
 @app.post("/api/records")
-async def insert_record(record: SchemaRecord, projects: List[SchemaRecordProjects], user: SchemaHoursUserBase = Depends(get_user)):
+async def insert_record(record: SchemaRecord, record_projects: List[SchemaRecordProjects], user: SchemaHoursUserBase = Depends(get_user)):
     
     userID = await get_user_ID(user)
 
@@ -260,7 +260,7 @@ async def insert_record(record: SchemaRecord, projects: List[SchemaRecordProject
     db_projects = []
     hourcount = 0.0
     
-    for project in projects:
+    for project in record_projects:
       
         if not project_exists(project.project_id):
             raise HTTPException(status_code=404,detail="Project not found")
@@ -279,7 +279,8 @@ async def insert_record(record: SchemaRecord, projects: List[SchemaRecordProject
                 user_id = record.user_id,
                 date_rec = record.date_rec,
                 project_id = project.project_id,
-                declared_hours = project.declared_hours
+                declared_hours = project.declared_hours,
+                domain = project.domain
             )
             db_projects.append(db_project)
 
@@ -342,16 +343,53 @@ async def get_records(hours_user_id: int, user: SchemaHoursUserBase = Depends(ge
         for project in record_projects:
             rec_proj = SchemaRecordProjects(
                 project_id= project.project_id,
-                declared_hours= project.declared_hours
+                declared_hours= project.declared_hours,
+                domain=project.domain
             )
             rec_projects.append(rec_proj)
         
         rec_ans = {"record": record,
-                   "projects":rec_projects}
+                   "record_projects":rec_projects}
         ans.append(rec_ans)     
 
     return ans
 
+
+#1.4.1 Modify hours in records
+@app.put("/api/records")
+async def change_record(record:SchemaRecord, record_projects:List[SchemaRecordProjects]):
+
+    hourcount=0.0
+
+    for rp in record_projects:
+        current_record_project = db.session.query(ModelRecordProjects).filter(
+            ModelRecordProjects.user_id == record.user_id,
+            ModelRecordProjects.date_rec == record.date_rec,
+            ModelRecordProjects.project_id == rp.project_id,
+            ModelRecordProjects.domain == rp.domain
+        ).first()
+
+        if not current_record_project:
+            db_rp = ModelRecordProjects(
+                user_id = record.user_id,
+                date_rec = record.date_rec,
+                project_id = rp.project_id,
+                declared_hours = rp.declared_hours,
+                domain = rp.domain
+                )
+            db.session.add(db_rp)
+
+        else:
+            current_record_project.declared_hours = rp.declared_hours
+
+        hourcount += rp.declared_hours
+    
+    if hourcount != 35.0:
+            raise HTTPException(status_code=400,detail="Hour count does not match required value")
+
+
+    db.session.commit()
+    return {"message":"Change successful"}
 
 
 # 1.5 Get projects /*/
@@ -506,41 +544,86 @@ async def get_hours_per_day(hours_user_id: int, date_init: date, date_end: date,
 #____________________________________________________________________________________________________
 
 # 2.1 Export records CSV 
-@app.get("/api/export-records-csv")
-async def export_csv():
-    result = db.session.query(ModelRecordProjects).all()
-    column_names = ["user_email",
+@app.post("/api/export-records-csv")
+async def export_csv(month1: Optional[int] = None,
+        year1: Optional[int] = None,
+        month2: Optional[int] = None,
+        year2: Optional[int] = None,
+        projects: Optional[List[int]] = None):
+    
+
+    if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
+
+    date_query = db.session.query(ModelRecord.date_rec).order_by(ModelRecord.date_rec)
+    dateList=[row.date_rec for row in date_query]
+    first_date=dateList[0]
+    last_date=dateList[-1]
+
+
+    projects_query = db.session.query(ModelProject.id)
+    projectList=[row.id for row in projects_query]
+    
+    if not projects:
+        projects = projectList
+
+
+    if month1 and year1:
+        dateM=datetime.date(year1,month1,1)
+        if month2 and year2:
+            dateFin=datetime.date(year2,month2+1,1)
+        else:
+            dateFin=last_date
+    elif month2 and year2:
+        dateFin=datetime.date(year2,month2+1,1)
+        dateM=first_date
+    else:
+        dateM=first_date
+        dateFin=last_date
+
+    result = db.session.query(ModelRecordProjects.id.label('id'),
+                        ModelProject.project_code.label('project_code'),
+                        ModelRecordProjects.date_rec.label('date'),
+                        ModelHoursUser.username.label('name'),
+                        ModelHoursUser.email.label('email'),
+                        ModelRecordProjects.domain.label('domain'),
+                           ModelRecordProjects.declared_hours.label('hours'))\
+    .join(ModelProject, ModelProject.id == ModelRecordProjects.project_id,isouter=True)\
+    .join(ModelHoursUser, ModelHoursUser.id == ModelRecordProjects.user_id,isouter=True)\
+    .filter(ModelRecordProjects.date_rec>=dateM,
+            ModelRecordProjects.date_rec<=dateFin,
+            ModelProject.id.in_(projects))\
+    .order_by(ModelProject.project_code,ModelRecordProjects.date_rec,ModelHoursUser.username)
+
+    column_names = ["project_code",
                     "week",
                     "year",
-                    "project_code",
-                    "declared_hours"]
+                    "name",
+                    "email",
+                    "domain",
+                    "hours"]
 
     csv_data = csv.DictWriter(open("export.csv","w"), fieldnames=column_names,delimiter=";")
     csv_data.writeheader()
+    
     for row in result:
-        user_email=getattr(db.session.query(ModelHoursUser).filter(
-            ModelHoursUser.id == getattr(row,"user_id")).first(),"email")
-        date_rec=getattr(row,"date_rec")
-        week=date_rec.isocalendar()[1]
-        year=date_rec.year
-        project_code=getattr(db.session.query(ModelProject).filter(
-            ModelProject.id == getattr(row,"project_id")).first(),"project_code")
-        declared_hours=getattr(row,"declared_hours")
-        to_add=[user_email,
-                    week,
-                    year,
-                    project_code,
-                    declared_hours]
-
-        row_data = {"user_email":user_email,
-                    "week":week,
-                    "year":year,
-                    "project_code":project_code,
-                    "declared_hours":declared_hours}      
+       
+        week=row.date.isocalendar()[1]
+        year=row.date.year
+        
+        row_data = {"project_code":row.project_code,
+            "week":week,
+            "year":year,
+            "name":row.name,
+            "email":row.email,
+            "domain":row.domain,
+            "hours":row.hours}      
         csv_data.writerow(row_data)
+        
 
     async with aiofiles.open("export.csv", mode="r") as f:
         contents = await f.read()
+
 
     return FileResponse("export.csv", filename="export.csv")
 
@@ -554,19 +637,21 @@ async def import_csv(file: UploadFile = File(...)):
     errors=[]
 
     for row in csv_data:
-        user_email = str(row['user_email'])
+        project_code = str(row['project_code'])
         week = int(row['week'])
         year = int(row['year'])
-        project_code = str(row['project_code'])
-        declared_hours = float(row['declared_hours'])
+        name = str(row['name'])
+        email = str(row['email'])
+        domain = str(row['domain'])
+        hours = float(row['hours'])
 
         date_rec = datetime.date.fromisocalendar(year,week,3)
         
         searched_user = db.session.query(ModelHoursUser).filter(
-                                        ModelHoursUser.email == user_email).first()
+                                        ModelHoursUser.email == email).first()
         
         if not searched_user:
-            raise HTTPException(status_code=400, detail="User "+ user_email + " not found")
+            raise HTTPException(status_code=400, detail="User "+ name + " not found")
         
         user_id = getattr(searched_user,"id")
         
@@ -609,7 +694,9 @@ async def import_csv(file: UploadFile = File(...)):
             user_id = user_id,
             date_rec = date_rec,
             project_id = project_id,
-            declared_hours = declared_hours)
+            domain = domain,
+            declared_hours = hours)
+            
             
         db.session.add(new_record_project)
     db.session.commit()
@@ -991,37 +1078,32 @@ async def kpi_piedomainhours( project_id: int,
 
     if start_date:
         if end_date:
-            result = (db.session.query(ModelHoursUser.domain, func.sum(ModelRecordProjects.declared_hours))
+            result = (db.session.query(ModelRecordProjects.domain,func.sum(ModelRecordProjects.declared_hours))
               .filter(
             ModelRecordProjects.project_id == project_id,
             ModelRecordProjects.date_rec >= start_date,
             ModelRecordProjects.date_rec < end_date
-            ).join(ModelRecord, ModelHoursUser.id == ModelRecord.user_id)
-            .join(ModelRecordProjects,(ModelRecord.date_rec == ModelRecordProjects.date_rec) & (ModelRecord.user_id == ModelRecordProjects.user_id) )
-            .group_by(ModelHoursUser.domain).all())
+            ).group_by(ModelRecordProjects.domain))
         else:
-            result = (db.session.query(ModelHoursUser.domain, func.sum(ModelRecordProjects.declared_hours))
+            (db.session.query(ModelRecordProjects.domain,func.sum(ModelRecordProjects.declared_hours))
               .filter(
             ModelRecordProjects.project_id == project_id,
             ModelRecordProjects.date_rec >= start_date,
-            ).join(ModelRecord, ModelHoursUser.id == ModelRecord.user_id)
-            .join(ModelRecordProjects,(ModelRecord.date_rec == ModelRecordProjects.date_rec) & (ModelRecord.user_id == ModelRecordProjects.user_id) )
-            .group_by(ModelHoursUser.domain).all())
+            )
+            .group_by(ModelRecordProjects.domain))
     elif end_date:
-        result = (db.session.query(ModelHoursUser.domain, func.sum(ModelRecordProjects.declared_hours))
+        result = (db.session.query(ModelRecordProjects.domain,func.sum(ModelRecordProjects.declared_hours))
               .filter(
             ModelRecordProjects.project_id == project_id,
             ModelRecordProjects.date_rec < end_date
-            ).join(ModelRecord, ModelHoursUser.id == ModelRecord.user_id)
-            .join(ModelRecordProjects,(ModelRecord.date_rec == ModelRecordProjects.date_rec) & (ModelRecord.user_id == ModelRecordProjects.user_id) )
-            .group_by(ModelHoursUser.domain).all())
+            )
+            .group_by(ModelRecordProjects.domain))
     else:
-        result = (db.session.query(ModelHoursUser.domain, func.sum(ModelRecordProjects.declared_hours))
+        result = (db.session.query(ModelRecordProjects.domain,func.sum(ModelRecordProjects.declared_hours))
               .filter(
             ModelRecordProjects.project_id == project_id
-            ).join(ModelRecord, ModelHoursUser.id == ModelRecord.user_id)
-            .join(ModelRecordProjects,(ModelRecord.date_rec == ModelRecordProjects.date_rec) & (ModelRecord.user_id == ModelRecordProjects.user_id) )
-            .group_by(ModelHoursUser.domain).all())
+            )
+            .group_by(ModelRecordProjects.domain))
     
     
     
@@ -1034,7 +1116,7 @@ async def kpi_piedomainhours( project_id: int,
             raise HTTPException(status_code=401, detail="Invalid units")
 
 
-    declared_hours_by_domain = {domain: declared_hours/factor for domain, declared_hours in result}
+    declared_hours_by_domain = {domain: round(declared_hours/factor,2) for domain, declared_hours in result}
 
 
 
@@ -1058,107 +1140,153 @@ async def kpi_linehours(
         month1: Optional[int] = None,
         year1: Optional[int] = None,
         month2: Optional[int] = None,
-        year2: Optional[int] = None,
-        user: SchemaHoursUserBase = Depends(get_user)
+        year2: Optional[int] = None
     ):
     
-    start_date = None
-    end_date = None
+    cond=False
 
-    if month1 is not None and year1 is not None:
-        start_date = datetime.date(year1, month1, 1)
+    forecasts = db.session.query(func.to_char(func.DATE_TRUNC('month', ModelMonthlyForecast.month), 'YYYY-MM-DD').label('month'),ModelMonthlyForecast.hours).filter(
+            ModelMonthlyForecast.project_id == project_id).all()
 
-    if month2 is not None and year2 is not None:
-        if month2 == 12:
-            end_date = datetime.date(year2 + 1, 1, 1)
+    if forecasts:
+        dateList=[row.month for row in forecasts]
+        first_date=dateList[0]
+        last_date=convert_to_seconddaystr(dateList[-1])
+    else:
+        date_query=db.session.query(
+                func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM-DD').label('month'),
+                func.sum(ModelRecordProjects.declared_hours).label('hours')
+            ).filter(ModelRecordProjects.project_id == project_id).group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec)).all()
+        dateList=[row.month for row in date_query]
+        first_date=dateList[0]
+        last_date=convert_to_seconddaystr(dateList[-1])
+
+
+
+    if month1 and year1:
+        start_date=datetime.date(year1,month1,1)
+        if month2 and year2:
+            end_date=datetime.date(year2,month2+1,2)
         else:
-            end_date = datetime.date(year2, month2 + 1, 1)
-
-    if start_date:
-        
-        if end_date:
-            result = (
+            end_date=last_date
+    elif month2 and year2:
+        end_date=datetime.date(year2,month2+1,2)
+        start_date=first_date
+    else:
+        start_date=first_date
+        end_date=last_date
+        cond=True
+     
+    result = (
             db.session.query(
                 func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM').label('date'),
                 func.sum(ModelRecordProjects.declared_hours).label('hours')
             ).filter(ModelRecordProjects.project_id == project_id,
                     ModelRecordProjects.date_rec >= start_date,
-                    ModelRecordProjects.date_rec < end_date
+                    ModelRecordProjects.date_rec <= end_date
                     )
             .group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec))
             .order_by(text("DATE_TRUNC('month', date_rec) ASC"))
             .all()
             )
-
-        else:
-            result = (
-                db.session.query(
-                    func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM').label('date'),
-                    func.sum(ModelRecordProjects.declared_hours).label('hours')
-                ).filter(ModelRecordProjects.project_id == project_id,
-                        ModelRecordProjects.date_rec >= start_date
-                        )
-                .group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec))
-                .order_by(text("DATE_TRUNC('month', date_rec) ASC"))
-                .all()
-                )
-    elif end_date:
-        result = (
-            db.session.query(
-                func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM').label('date'),
-                func.sum(ModelRecordProjects.declared_hours).label('hours')
-            ).filter(ModelRecordProjects.project_id == project_id,
-                    ModelRecordProjects.date_rec < end_date
-                    )
-            .group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec))
-            .order_by(text("DATE_TRUNC('month', date_rec) ASC"))
-            .all()
-            )
-    else:
-        result = (
-        db.session.query(
-            func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM').label('date'),
-            func.sum(ModelRecordProjects.declared_hours).label('hours')
-        ).filter(ModelRecordProjects.project_id == project_id
-                )
-        .group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec))
-        .order_by(text("DATE_TRUNC('month', date_rec) ASC"))
-        .all()
-        )
-
+    
     # Convert the result into a list of dictionaries
     dates = [row.date for row in result]
     hours = [row.hours for row in result]
     
+    realdata={date:hours for date, hours in zip(dates,hours)}
+    realHours=[]
+
+    fvalues=[forecast.hours for forecast in forecasts]
+    fdates=[convert_to_monthstr(forecast.month) for forecast in forecasts]
+
+    
+
+    if cond:
+        realdates=fdates
+    else:
+        realdates=dates
+    
+
+    for date in realdates:
+        realHours.append(realdata.get(date,0))
+
     if(unit=='TDE'):
-        TDEs=[row/140 for row in hours]
-        hours=TDEs
+        TDEs=[round(row/140,2) for row in realHours]
+        realHours=TDEs
     else:
         if not unit=='h':
             raise HTTPException(status_code=401, detail="Invalid units")
 
+
     if cumulative:
         cumhours = []
-        cumsum=0
-        for hour in hours:
-            cumsum += hour
+        cumsum=0.0
+        for rhour in realHours:
+            cumsum += float(rhour)
             cumhours.append(cumsum)
-        hours=cumhours
+        realHours=cumhours
 
-    return {
-        'unit':unit,
-        'xAxis': {"data":dates},
-        'series':[
+    realHours=[round(row,2) for row in realHours]
+
+
+    forecastVals={month:hours for month, hours in zip(fdates,fvalues)}
+    forecastHours=[]
+
+    for date in realdates:
+        forecastHours.append(forecastVals.get(date,0))
+
+    if cumulative:
+        cumforehours = []
+        cumforesum=0.0
+        for fhour in forecastHours:
+            cumforesum += round(float(fhour),2)
+            cumforehours.append(cumforesum)
+        forecastHours=cumforehours
+
+
+    legend=["Spent"]    
+    series= [
             {
-                "data": hours,
+                "data": realHours,
                 "name": "Spent",
                 "type": 'line'
             }
-        ],
+        ]
+
+    
+      
+        
+    
+    
+    if not(sum(forecastHours)==0):
+        if(unit=='TDE'):
+            TDEs=[round(row/140,2) for row in forecastHours]
+            forecastHours=TDEs
+        else:
+            if not unit=='h':
+                raise HTTPException(status_code=401, detail="Invalid units")
+            
+        series.append({
+            "data": forecastHours,
+            "name": "Forecast",
+            "type": 'line'
+            }
+            )
+        legend.append("Forecast")
+
+
+    ans= {
+        'unit':unit,
+        'xAxis': {"data":realdates},
+        'series': series,
         'legend': {
-            'data': ["Spent"]
+            'data': legend
         }
     }
+
+    
+    return ans
 
 #2.11 KPI Stacked bar chart
 @app.get("/api/kpi/stackedbar/hour_expenditure_by_project")
@@ -1188,7 +1316,7 @@ async def kpi_stackedbar(
     for res in result:
                        
         to_add={
-            "data": [res.hours/factor],
+            "data": [round(res.hours/factor,2)],
             "name": res.project_phase,
             "type": "bar"
         }
@@ -1203,7 +1331,77 @@ async def kpi_stackedbar(
         'legend':{'data':phases}
     }
 
+#2.12 Data tab: see data
+@app.post("/api/data")
+async def see_data(month1: Optional[int] = None,
+        year1: Optional[int] = None,
+        month2: Optional[int] = None,
+        year2: Optional[int] = None,
+        projects: Optional[List[int]] = None):
+    
+    if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
 
+    date_query = db.session.query(ModelRecord.date_rec).order_by(ModelRecord.date_rec)
+    dateList=[row.date_rec for row in date_query]
+    first_date=dateList[0]
+    last_date=dateList[-1]
+
+
+    projects_query = db.session.query(ModelProject.id)
+    projectList=[row.id for row in projects_query]
+    
+    if not projects:
+        projects = projectList
+
+
+    if month1 and year1:
+        dateM=datetime.date(year1,month1,1)
+        if month2 and year2:
+            dateFin=datetime.date(year2,month2+1,1)
+        else:
+            dateFin=last_date
+    elif month2 and year2:
+        dateFin=datetime.date(year2,month2+1,1)
+        dateM=first_date
+    else:
+        dateM=first_date
+        dateFin=last_date
+    
+    ans=[]
+
+
+
+    query = db.session.query(ModelRecordProjects.id.label('id'),
+                        ModelProject.project_code.label('project_code'),
+                        ModelRecordProjects.date_rec.label('date'),
+                        ModelHoursUser.username.label('name'),
+                        ModelHoursUser.email.label('email'),
+                           ModelRecordProjects.declared_hours.label('hours'))\
+    .join(ModelProject, ModelProject.id == ModelRecordProjects.project_id,isouter=True)\
+    .join(ModelHoursUser, ModelHoursUser.id == ModelRecordProjects.user_id,isouter=True)\
+    .filter(ModelRecordProjects.date_rec>=dateM,
+            ModelRecordProjects.date_rec<=dateFin,
+            ModelProject.id.in_(projects))\
+    .order_by(ModelProject.project_code,ModelRecordProjects.date_rec,ModelHoursUser.username)
+
+    for row in query:
+        
+        week=row.date.isocalendar()[1]
+        year=row.date.year
+
+        db_row={
+            "project_code":row.project_code,
+            "week":week,
+            "year":year,
+            "name":row.name,
+            "email":row.email,
+            "hours":row.hours
+        }
+        
+        ans.append(db_row)
+
+    return ans
 
 
 
@@ -1213,7 +1411,7 @@ async def kpi_stackedbar(
 
 #3.1. Get monthly hours
 @app.get("/api/monthlyhours",response_model=List[SchemaMonthlyModifiedHours])
-async def get_monthly_hours(month:int, year:int, user = Depends(get_user)):
+async def get_monthly_hours(month:int, year:int):
     
     # Getting the current date and time
     
@@ -1226,25 +1424,30 @@ async def get_monthly_hours(month:int, year:int, user = Depends(get_user)):
     for user in filtered_users:
         
         username = getattr(db.session.query(ModelHoursUser).filter(ModelHoursUser.id == user.user_id).first(),"username")
-       
+        tothours=0.0
         hourslist=[]
+        dom="General"
 
         records_with_user=db.session.query(ModelMonthlyModifiedHours).filter(ModelMonthlyModifiedHours.month == dateM,
                                                                              ModelMonthlyModifiedHours.user_id == user.user_id)
 
         for record in records_with_user:
+            if record.total_hours:
+                tothours = record.total_hours
             if not record.total_hours == 0:
+                dom = record.domain
                 proj={"project_id":record.project_id,
                     "hours":record.total_hours}
                 hourslist.append(proj)               
                 
-
-        sch=SchemaMonthlyModifiedHours(
-            user_id=user.user_id,
-            user_name=username,
-            hours=hourslist
-        )
-        ans.append(sch)
+        if tothours != 0.0:
+            sch=SchemaMonthlyModifiedHours(
+                user_id=user.user_id,
+                user_name=username,
+                domain = dom,
+                hours=hourslist
+            )
+            ans.append(sch)
 
     return ans
 
@@ -1271,7 +1474,8 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
                     user_id = user_id,
                     project_id = project["project_id"],
                     month = dateM,
-                    total_hours = project["hours"]
+                    total_hours = project["hours"],
+                    domain = change.domain
                 )
         
                 db.session.add(db_monthlyhour)
@@ -1291,7 +1495,13 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
 async def update_monthly_hours(month:int, year:int):
     
     dateM=datetime.date(year,month,1)
-    dateFin=datetime.date(year,month+1,2)
+
+    if month == 12:
+        dateFin = datetime.date(year + 1, 1, 1)
+    else:
+        dateFin = datetime.date(year, month + 1, 2)
+
+
  
     existingMonthlyHours= db.session.query(ModelMonthlyModifiedHours).filter(
         ModelMonthlyModifiedHours.month == dateM
@@ -1306,6 +1516,7 @@ async def update_monthly_hours(month:int, year:int):
     subquery = db.session.query(
         ModelRecordProjects.user_id,
         ModelRecordProjects.project_id,
+        ModelRecordProjects.domain,
         func.date_trunc('month', dateM).label('month'),
         func.sum(
             case(
@@ -1332,7 +1543,8 @@ async def update_monthly_hours(month:int, year:int):
                 user_id = row.user_id,
                 project_id = row.project_id,
                 month = dateM,
-                total_hours = row.total_hours
+                total_hours = row.total_hours,
+                domain = row.domain
                 )
         
         db.session.add(db_monthlyhour)
@@ -1343,28 +1555,373 @@ async def update_monthly_hours(month:int, year:int):
 
 
 
-#3.4. Business KPIs: capitalization summary
+#3.4. Business KPIs: capitalization summary pie
+
+@app.get("/api/business_kpi/pie/cap_summary")
+async def businesskpi_piecapsummary(
+        unit: str, 
+        month1: Optional[int] = None,
+        year1: Optional[int] = None,
+        month2: Optional[int] = None,
+        year2: Optional[int] = None):
+    
+    if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
+
+    date_query = db.session.query(ModelMonthlyModifiedHours.month).order_by(ModelMonthlyModifiedHours.month)
+    dateList=[row.month for row in date_query]
+    first_date=dateList[0]
+    last_date=dateList[-1]
+
+    if month1 and year1:
+        dateM=datetime.date(year1,month1,1)
+        if month2 and year2:
+            dateFin=datetime.date(year2,month2,1)
+        else:
+            dateFin=last_date
+    elif month2 and year2:
+        dateFin=datetime.date(year2,month2,1)
+        dateM=first_date
+    else:
+        dateM=first_date
+        dateFin=last_date
+        
+    #Capitalized
+    
+    cap_table_by_division= db.session.query(ModelProject.division, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month >= dateM,
+            ModelMonthlyModifiedHours.month <= dateFin,
+            or_(
+                and_(
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= dateM,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > dateM)),
+                and_( \
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= dateFin,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > dateM))))\
+    .group_by(ModelProject.division) \
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+    if not cap_table_by_division:
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
+
+    tot_cap_hours=sum([row.hours for row in cap_table_by_division])
+
+    tot_hours_query= db.session.query(func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+    .filter(ModelMonthlyModifiedHours.month >= dateM,
+            ModelMonthlyModifiedHours.month <= dateFin,
+            ModelProject.project_code != 'ABS').first()
+    
+    tot_hours = tot_hours_query.hours
+    
+    if not tot_hours:
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
+
+    tot_noncap_hours=tot_hours-tot_cap_hours
+
+
+    factor = 1
+    if(unit=='TDE'):
+        factor=140
+    else:
+        if not unit=='h':
+            raise HTTPException(status_code=401, detail="Invalid units")
+
+    data1=[]
+    
+    db_cap_hours={"value": round(tot_cap_hours/factor,2),
+            "name": 'Capitalized'}
+    db_noncap_hours={"value": round(tot_noncap_hours/factor,2),
+            "name": 'Non-capitalized'}
+    
+    data1.append(db_cap_hours)
+    data1.append(db_noncap_hours)
+
+
+    data2=[]
+    for row in cap_table_by_division:
+        db_cap={
+            "value": round(row.hours/factor,2),
+            "name": row.division
+        }
+
+        data2.append(db_cap)
+
+    FCS_hours_query= db.session.query(func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+    .filter(ModelMonthlyModifiedHours.month >= dateM,
+            ModelMonthlyModifiedHours.month <= dateFin,
+            ModelProject.project_code == 'FCS').first()
+
+    FCS_hours = FCS_hours_query.hours
+
+    other_hours_query= db.session.query(func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+    .filter(ModelMonthlyModifiedHours.month >= dateM,
+            ModelMonthlyModifiedHours.month <= dateFin,
+            ModelProject.project_code != 'FCS',
+            ModelProject.sub_category == 'ETC').first()
+
+    other_hours = other_hours_query.hours
+
+    noncap_proj_hours= tot_noncap_hours-FCS_hours-other_hours
+
+    
+    data2.append({"value":round(noncap_proj_hours/factor,2),
+                 "name":"Non-cap projects"})
+    
+    data2.append({"value":round(FCS_hours/factor,2),
+                 "name":"Eng. change/prod support"})
+    
+    data2.append({"value":round(other_hours/factor,2),
+                 "name":"Man/Res/Reg/ISIT/Etc"})
+
+    legend=['Capitalized','Non-capitalized']
+
+    for row in cap_table_by_division:
+        legend.append(row.division)
+
+    legend.append("Non-cap projects")
+    legend.append("Eng. change/prod support")
+    legend.append("Man/Res/Reg/ISIT/Etc")
+
+    ans={"legend":legend,
+        "series":[
+        {"type": "pie",
+         "data":data1},
+        {"type": "pie",
+         "data":data2},
+        ]
+         }
+    return ans
 
 
 
 
+#3.5. Business KPIs: capitalization summary bar
+
+@app.get("/api/business_kpi/bar/cap_summary")
+async def businesskpi_barcapsummary(
+        unit: str, 
+        month1: Optional[int] = None,
+        year1: Optional[int] = None,
+        month2: Optional[int] = None,
+        year2: Optional[int] = None):
+    
+
+    if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
+
+    date_query = db.session.query(ModelMonthlyModifiedHours.month).order_by(ModelMonthlyModifiedHours.month)
+    dateList=[row.month for row in date_query]
+    first_date=dateList[0]
+    last_date=dateList[-1]
+
+    if month1 and year1:
+        dateM=datetime.date(year1,month1,1)
+        if month2 and year2:
+            dateFin=datetime.date(year2,month2,1)
+        else:
+            dateFin=last_date
+    elif month2 and year2:
+        dateFin=datetime.date(year2,month2,1)
+        dateM=first_date
+    else:
+        dateM=first_date
+        dateFin=last_date
 
 
 
 
+    
+    ans=[]
+
+    cap_table_by_subcategory= db.session.query(ModelProject.sub_category, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month >= dateM,
+            ModelMonthlyModifiedHours.month <= dateFin,
+            or_(
+                and_(
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= dateM,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > dateM)),
+                and_( \
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= dateFin,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > dateM)))) \
+    .group_by(ModelProject.sub_category) \
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+    tot_table_by_subcategory= db.session.query(ModelProject.sub_category, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month >= dateM,
+            ModelMonthlyModifiedHours.month <= dateFin,
+            ModelProject.project_code != 'ABS') \
+    .group_by(ModelProject.sub_category) \
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+    cap_subcats = [row.sub_category for row in cap_table_by_subcategory]
+    tot_subcats = [row.sub_category for row in tot_table_by_subcategory]
+    
+    subcats=concatanateListswoduplicates(cap_subcats,tot_subcats)
+
+    cap_dict={row.sub_category:row.hours for row in cap_table_by_subcategory}
+    tot_dict={row.sub_category:row.hours for row in tot_table_by_subcategory}
+
+    cap_values=[]
+    tot_values=[]
+
+    factor = 1
+    if(unit=='TDE'):
+        factor=140
+    else:
+        if not unit=='h':
+            raise HTTPException(status_code=401, detail="Invalid units")
+        
+    for sc in subcats:
+        cap_values.append(round(cap_dict.get(sc,0)/factor,2))
+        tot_values.append(round(tot_dict.get(sc,0)/factor,2))
+
+    ans={
+        "yAxis":{'data': subcats},
+        "series": [
+            {"name":"Dev effort",
+             "data":tot_values},
+            {"name":"Capitalization",
+             "data":cap_values}
+        ]
+    }
+
+    return ans
 
 
+#3.6. Business KPIs: stacked non-cap line
 
+@app.get("/api/business_kpi/line/noncap_summary")
+async def businesskpi_linenoncapsummary(
+        unit: str, 
+        month1: Optional[int] = None,
+        year1: Optional[int] = None,
+        month2: Optional[int] = None,
+        year2: Optional[int] = None):
 
+    if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
+        raise HTTPException(status_code=400, detail="Invalid month and year input")
 
+    date_query = db.session.query(ModelMonthlyModifiedHours.month).order_by(ModelMonthlyModifiedHours.month)
+    dateList=[row.month for row in date_query]
+    first_date=dateList[0]
+    last_date=dateList[-1]
 
+    if month1 and year1:
+        dateM=datetime.date(year1,month1,1)
+        if month2 and year2:
+            dateFin=datetime.date(year2,month2,1)
+        else:
+            dateFin=last_date
+    elif month2 and year2:
+        dateFin=datetime.date(year2,month2,1)
+        dateM=first_date
+    else:
+        dateM=first_date
+        dateFin=last_date
 
+    factor = 1
+    if(unit=='TDE'):
+        factor=140
+    else:
+        if not unit=='h':
+            raise HTTPException(status_code=401, detail="Invalid units")
+        
+    
 
+    FCS_hours_query = db.session.query(ModelMonthlyModifiedHours.month,func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month >= dateM,
+                ModelMonthlyModifiedHours.month <= dateFin,
+                ModelProject.project_code == 'FCS')\
+        .group_by(ModelMonthlyModifiedHours.month)\
+        .order_by(ModelMonthlyModifiedHours.month)
+    
+    ETC_hours_query = db.session.query(ModelMonthlyModifiedHours.month,func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month >= dateM,
+                ModelMonthlyModifiedHours.month <= dateFin,
+                ModelProject.sub_category == 'ETC',
+                ModelProject.project_code != 'FCS')\
+        .group_by(ModelMonthlyModifiedHours.month)\
+        .order_by(ModelMonthlyModifiedHours.month)
+    
+    TOT_hours_query = db.session.query(ModelMonthlyModifiedHours.month,func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month >= dateM,
+                ModelMonthlyModifiedHours.month <= dateFin,
+                ModelProject.project_code != 'ABS')\
+        .group_by(ModelMonthlyModifiedHours.month)\
+        .order_by(ModelMonthlyModifiedHours.month)
+    
+    dates=[row.month for row in FCS_hours_query]
+    dataengchange=[round(row.hours/factor,2) for row in FCS_hours_query]
+    
+    dataetc=[round(row.hours/factor,2) for row in ETC_hours_query]
+    datatot=[round(row.hours/factor,2) for row in TOT_hours_query]
+    datacap=[]
+    for date in dates:
+        
+        CAP_hours_query = db.session.query(ModelMonthlyModifiedHours.month,func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month == date,
+                ModelProject.project_code != 'ABS',
+                and_(
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= date,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > date)))\
+        .group_by(ModelMonthlyModifiedHours.month)\
+        .order_by(ModelMonthlyModifiedHours.month)
+        
+        datacap.append(round(row.hours/factor,2) for row in CAP_hours_query)
 
+    flatdatacap=[num for sublist in datacap for num in sublist]
+    datacap=flatdatacap
+    
+    datanoncaptot=[a-b for a,b in zip(datatot,datacap)]
+    datasum=[a+b for a,b in zip(dataetc,dataengchange)]
+    datanoncap=[a-b for a,b in zip(datanoncaptot,datasum)]
+    
+    datatotal=[a+b for a,b in zip(dataengchange,datanoncap)]
 
+    dates=[convert_date_to_month(date) for date in dates]
 
+    ans = {
+        'xAxis':{
+            "data":dates
+        },
+        'series':[
+            {
+                'name': 'Non-cap projects',
+                'data': datanoncap
+            },
+            {
+                'name': 'Eng. change/prod support',
+                'data': dataengchange
+            },
+            {
+                'name': 'Total',
+                'data': datatotal
+            }
+        ]
+    }
+    
 
-#3.x. Business KPIs: line
+    return ans
+
+#3.7. Business KPIs: line
 @app.get("/api/business_kpi/line/hour_expenditure")
 async def businesskpi_linehours(
         cumulative:bool, 
@@ -1451,7 +2008,7 @@ async def businesskpi_linehours(
         hours=cumhours
 
     if(unit=='TDE'):
-        TDEs=[row/140 for row in hours]
+        TDEs=[round(row/140,2) for row in hours]
         hours=TDEs
     else:
         if not unit=='h':
@@ -1473,15 +2030,14 @@ async def businesskpi_linehours(
         }
     }
 
-#3.x. Business KPIs: pie
+#3.8. Business KPIs: pie
 @app.get("/api/business_kpi/pie/hours_by_domain")
 async def businesskpi_piedomainhours(
     unit: str, 
     month1: Optional[int] = None,
     year1: Optional[int] = None,
     month2: Optional[int] = None,
-    year2: Optional[int] = None,
-    user: SchemaHoursUserBase = Depends(get_user)):
+    year2: Optional[int] = None):
 
     start_date = None
     end_date = None
@@ -1497,26 +2053,22 @@ async def businesskpi_piedomainhours(
 
     if start_date:
         if end_date:
-            result = (db.session.query(ModelHoursUser.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
+            result = (db.session.query(ModelMonthlyModifiedHours.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
                 .filter(
                 ModelMonthlyModifiedHours.month >= start_date,
                 ModelMonthlyModifiedHours.month < end_date)
-                .join(ModelMonthlyModifiedHours, ModelHoursUser.id == ModelMonthlyModifiedHours.user_id)
-                .group_by(ModelHoursUser.domain).all())
+                .group_by(ModelMonthlyModifiedHours.domain).all())
         else:
-            result = (db.session.query(ModelHoursUser.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
+            result = (db.session.query(ModelMonthlyModifiedHours.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
                 .filter(ModelMonthlyModifiedHours.month >= start_date)
-                .join(ModelMonthlyModifiedHours, ModelHoursUser.id == ModelMonthlyModifiedHours.user_id)
-                .group_by(ModelHoursUser.domain).all())
+                .group_by(ModelMonthlyModifiedHours.domain).all())
     elif end_date:
-        result = (db.session.query(ModelHoursUser.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
+        result = (db.session.query(ModelMonthlyModifiedHours.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
                 .filter(ModelMonthlyModifiedHours.month < end_date)
-                .join(ModelMonthlyModifiedHours, ModelHoursUser.id == ModelMonthlyModifiedHours.user_id)
-                .group_by(ModelHoursUser.domain).all())
+                .group_by(ModelMonthlyModifiedHours.domain).all())
     else:
-        result = (db.session.query(ModelHoursUser.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
-                .join(ModelMonthlyModifiedHours, ModelHoursUser.id == ModelMonthlyModifiedHours.user_id)
-                .group_by(ModelHoursUser.domain).all())
+        result = (db.session.query(ModelMonthlyModifiedHours.domain, func.sum(ModelMonthlyModifiedHours.total_hours))
+                .group_by(ModelMonthlyModifiedHours.domain).all())
 
     
 
@@ -1527,7 +2079,7 @@ async def businesskpi_piedomainhours(
         if not unit=='h':
             raise HTTPException(status_code=401, detail="Invalid units")
 
-    declared_hours_by_domain = {domain: declared_hours/factor for domain, declared_hours in result}
+    declared_hours_by_domain = {domain: round(declared_hours/factor,2) for domain, declared_hours in result}
 
     return {
         'unit':'h',
@@ -1540,7 +2092,7 @@ async def businesskpi_piedomainhours(
         ]
     }
 
-#3.x. Get users
+#3.9. Get users
 @app.get("/api/getusers")
 async def get_all_users():
     ans=[]
@@ -1556,6 +2108,51 @@ async def get_all_users():
         
         ans.append(db_user)
     return ans
+
+#3.10. Export monthly hours
+@app.get("/api/export_monthly")
+async def export_monthly(month:int, year:int):
+    dateM=datetime.date(year,month,1)
+    
+    query = db.session.query(ModelMonthlyModifiedHours.total_hours.label('buffer'),
+                        ModelProject.project_code.label('project_code'),
+                        ModelHoursUser.username.label('name'),
+                        ModelMonthlyModifiedHours.month.label('month'),
+                        ModelMonthlyModifiedHours.total_hours.label('hours'))\
+    .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id,isouter=True)\
+    .join(ModelHoursUser, ModelHoursUser.id == ModelMonthlyModifiedHours.user_id,isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month == dateM)\
+    .order_by(ModelProject.project_code,ModelHoursUser.username)
+
+    if not query:
+        raise HTTPException(status_code=401, detail="No records for inputted month")
+
+    column_names = ["project_code",
+                    "name",
+                    "month",
+                    "year",
+                    "hours"]
+
+    csv_data = csv.DictWriter(open("exportModified.csv","w"), fieldnames=column_names,delimiter=";")
+    csv_data.writeheader()
+    
+    for row in query:
+       
+        week=row.month.isocalendar()[1]
+        year=row.month.year
+        
+        row_data = {"project_code":row.project_code,
+            "name":row.name,
+            "month":week,
+            "year":year,
+            "hours":row.hours}      
+        csv_data.writerow(row_data)
+
+    async with aiofiles.open("exportModified.csv", mode="r") as f:
+        contents = await f.read()
+
+
+    return FileResponse("exportModified.csv", filename="exportModified.csv")
 
 
 #___________________________________________________________________________________________
@@ -1632,6 +2229,40 @@ def update_project_phase_hours(project_id):
 
     except Exception as e:
         raise HTTPException(status_code=404, detail="Unable to update hours")
+
+def concatanateListswoduplicates(list1, list2):
+    set1=set(list1)
+    set2=set(list2)
+    result_set =  set1.union(set2)
+    return list(result_set)
+
+def convert_date_to_month(input_date):
+    
+        output_date = input_date.strftime('%Y-%m')
+        return output_date
+
+def convert_to_monthstr(input_date):
+    
+    
+    if(type(input_date)==str):
+        parts = input_date.split('-')
+        
+        
+        output_date = f"{parts[0]}-{parts[1]}"
+    
+    else:
+        output_date = input_date + timedelta(1)
+
+    return output_date
+
+def convert_to_seconddaystr(input_date):
+    
+    # Split the input date into parts using '-' as the separator
+    parts = input_date.split('-')
+    
+    # Reformat the date to 'YYYY-MM' format
+    output_date = f"{parts[0]}-{parts[1]}-02"
+    return output_date
 
 
 #add: change monthly hours from csv
