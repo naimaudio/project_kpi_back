@@ -14,8 +14,10 @@
 .python_history
 .bash_logout
 backend/fastapi
+backend/temp
 **/__pycache__
 /certificates
 .console-ninja
 .local
 .rnd
+.env.pgadmin

@@ -4,10 +4,8 @@ services:
   pgadmin:
     container_name: "pgadmin"
     image: dpage/pgadmin4
-    environment:
-      - PGADMIN_DEFAULT_EMAIL=d.sierra@focal.com
-      - PGADMIN_DEFAULT_PASSWORD=projecthours
-      - PGADMIN_LISTEN_PORT=8091
+    env_file:
+      - ./.env.pgadmin
     network_mode: host
 
   backend-prod:
