@@ -9,6 +9,10 @@ from datetime import date, timedelta
 import csv
 import aiofiles
 import requests
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill
+from copy import copy
+
 
 #Import FastAPI dependencies
 from fastapi import Depends, FastAPI , HTTPException, File, UploadFile, status
@@ -191,7 +195,7 @@ async def get_usertest(user = Depends(test_auth)):
     return user
 
 
-# 1.1 Get user /*/
+# 1.1 Get user
 @app.get("/api/user")
 async def get_hours_user(user: SchemaHoursUserBase = Depends(get_user)):
     
@@ -212,7 +216,7 @@ async def get_hours_user(user: SchemaHoursUserBase = Depends(get_user)):
 
     return frontenduser
 
-# 1.2 Get user ID /*/
+# 1.2 Get user ID 
 @app.get("/api/userID")
 async def get_user_ID(user: SchemaHoursUserBase = Depends(get_user)):
     
@@ -224,7 +228,7 @@ async def get_user_ID(user: SchemaHoursUserBase = Depends(get_user)):
     return str(usermodel.id)
 
 
-# 1.3 Insert record /*/
+# 1.3 Insert record
 @app.post("/api/records")
 async def insert_record(record: SchemaRecord, record_projects: List[SchemaRecordProjects], user: SchemaHoursUserBase = Depends(get_user)):
     
@@ -315,7 +319,7 @@ async def insert_record(record: SchemaRecord, record_projects: List[SchemaRecord
     return {"message": "Record created successfully."}
 
 
-# 1.4 Get record /*/
+# 1.4 Get record
 @app.get("/api/records/{hours_user_id}")
 async def get_records(hours_user_id: int, user: SchemaHoursUserBase = Depends(get_user)):
     
@@ -353,32 +357,30 @@ async def get_records(hours_user_id: int, user: SchemaHoursUserBase = Depends(ge
     return ans
 
 
-#1.4.1 Modify hours in records
+#1.5 Modify hours in records
 @app.put("/api/records")
-async def change_record(record:SchemaRecord, record_projects:List[SchemaRecordProjects]):
+async def change_record(record:SchemaRecord, record_projects:List[SchemaRecordProjects], user: SchemaHoursUserBase = Depends(get_user)):
 
     hourcount=0.0
 
-    for rp in record_projects:
-        current_record_project = db.session.query(ModelRecordProjects).filter(
+    current_record_projects = db.session.query(ModelRecordProjects).filter(
             ModelRecordProjects.user_id == record.user_id,
             ModelRecordProjects.date_rec == record.date_rec,
-            ModelRecordProjects.project_id == rp.project_id,
-            ModelRecordProjects.domain == rp.domain
-        ).first()
+        )
+    
+    for record_project in current_record_projects:
+        db.session.delete(record_project)
 
-        if not current_record_project:
-            db_rp = ModelRecordProjects(
-                user_id = record.user_id,
-                date_rec = record.date_rec,
-                project_id = rp.project_id,
-                declared_hours = rp.declared_hours,
-                domain = rp.domain
-                )
-            db.session.add(db_rp)
+    for rp in record_projects:
 
-        else:
-            current_record_project.declared_hours = rp.declared_hours
+        db_rp = ModelRecordProjects(
+            user_id = record.user_id,
+            date_rec = record.date_rec,
+            project_id = rp.project_id,
+            declared_hours = rp.declared_hours,
+            domain = rp.domain
+            )
+        db.session.add(db_rp)
 
         hourcount += rp.declared_hours
     
@@ -390,7 +392,7 @@ async def change_record(record:SchemaRecord, record_projects:List[SchemaRecordPr
     return {"message":"Change successful"}
 
 
-# 1.5 Get projects /*/
+# 1.6 Get projects /*/
 @app.get("/api/projects",response_model=List[SchemaProject])
 async def get_projects(user = Depends(get_user)):
     projects =db.session.query(ModelProject).all()
@@ -398,7 +400,7 @@ async def get_projects(user = Depends(get_user)):
             raise HTTPException(status_code=404,detail="No projects on database")
     return projects
 
-# 1.6 Define favorites /*/
+# 1.7 Define favorites /*/
 @app.post("/api/favorites",response_model=List[SchemaFavorites])
 async def define_favorites(favorites: List[SchemaFavorites], user = Depends(get_user)):
     db_favorites = []
@@ -482,7 +484,7 @@ async def get_domain(hours_user_id: int, user = Depends(get_user)):
 @app.put("/api/domain/{hours_user_id}")
 async def update_domain(hours_user_id: int, updated_domain: str, user = Depends(get_user)):
     
-    domain_options = ['Acoustics','Tests','Hardware','Software','Mechanics','Project Management']
+    domain_options = ['Acoustics','Tests','Hardware','Software','Mechanics','Project Management','Shop floor','General']
 
     if updated_domain not in domain_options:
         raise HTTPException(status_code=400, detail="Wrong domain input")
@@ -549,6 +551,7 @@ async def export_csv(month1: Optional[int] = None,
         year2: Optional[int] = None,
         projects: Optional[List[int]] = None):
     
+    tempFileName='./temp/export.csv'
 
     if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
         raise HTTPException(status_code=400, detail="Invalid month and year input")
@@ -601,7 +604,7 @@ async def export_csv(month1: Optional[int] = None,
                     "domain",
                     "hours"]
 
-    csv_data = csv.DictWriter(open("export.csv","w"), fieldnames=column_names,delimiter=";")
+    csv_data = csv.DictWriter(open(tempFileName,"w"), fieldnames=column_names,delimiter=";")
     csv_data.writeheader()
     
     for row in result:
@@ -619,91 +622,118 @@ async def export_csv(month1: Optional[int] = None,
         csv_data.writerow(row_data)
         
 
-    async with aiofiles.open("export.csv", mode="r") as f:
+    async with aiofiles.open(tempFileName, mode="r") as f:
         contents = await f.read()
 
 
-    return FileResponse("export.csv", filename="export.csv")
+    return FileResponse(tempFileName, filename=tempFileName)
 
-# 2.2 Import records from CSV 
-
+# 2.2 Import records CSV
 @app.post("/api/import-csv")
 async def import_csv(file: UploadFile = File(...)):
     
-    contents = await file.read()
-    csv_data = csv.DictReader(contents.decode("utf-8").splitlines(),delimiter=";")
-    errors=[]
+    
 
-    for row in csv_data:
-        project_code = str(row['project_code'])
-        week = int(row['week'])
-        year = int(row['year'])
-        name = str(row['name'])
-        email = str(row['email'])
-        domain = str(row['domain'])
-        hours = float(row['hours'])
+    try:
 
-        date_rec = datetime.date.fromisocalendar(year,week,3)
-        
-        searched_user = db.session.query(ModelHoursUser).filter(
-                                        ModelHoursUser.email == email).first()
-        
-        if not searched_user:
-            raise HTTPException(status_code=400, detail="User "+ name + " not found")
-        
-        user_id = getattr(searched_user,"id")
-        
-        searched_project = db.session.query(ModelProject).filter(
-                                        ModelProject.project_code == project_code).first()
-        
-        if not searched_project:
-            raise HTTPException(status_code=400, detail="Project "+ project_code + " not found")
-        
+        contents = await file.read()
+        csv_data = csv.DictReader(contents.decode("utf-8").splitlines(),delimiter=";")
+        hoursRecords={}
 
-        project_id = getattr(searched_project,"id")
-        
-        
-        
-        
-        existing_record_project=db.session.query(ModelRecordProjects).filter(
-                                        ModelRecordProjects.user_id == user_id,
-                                        ModelRecordProjects.date_rec == date_rec,
-                                        ModelRecordProjects.project_id == project_id).first()
+        for row in csv_data:
+            project_code = str(row['project_code'])
+            week = int(row['week'])
+            year = int(row['year'])
+            name = str(row['name'])
+            email = str(row['email'])
+            domain = str(row['domain'])
+            hours = float(row['hours'])
 
-
-
-        record_exists = db.session.query(ModelRecord).filter(
-                                        ModelRecord.user_id == user_id,
-                                        ModelRecord.date_rec == date_rec).first()
             
-        if not record_exists:
-            new_record = ModelRecord(
-            user_id = user_id,
-            date_rec = date_rec,
-            )
+
+            date_rec = datetime.date.fromisocalendar(year,week,3)
+            
+            searched_user = db.session.query(ModelHoursUser).filter(
+                                            ModelHoursUser.email == email).first()
+            
+            if not searched_user:
+                raise HTTPException(status_code=400, detail="User "+ name + " not found")
+            
+            user_id = getattr(searched_user,"id")
+            
+            searched_project = db.session.query(ModelProject).filter(
+                                            ModelProject.project_code == project_code).first()
+            
+            if not searched_project:
+                raise HTTPException(status_code=400, detail="Project "+ project_code + " not found")
+            
+
+            project_id = getattr(searched_project,"id")
+            
+            
+            
+            
+            recordkey = str(date_rec)+str(user_id)
+
+
+
+            record_exists = db.session.query(ModelRecord).filter(
+                                            ModelRecord.user_id == user_id,
+                                            ModelRecord.date_rec == date_rec).first()
+
+                        
                 
-            db.session.add(new_record)
-        else:
-            if existing_record_project:
-                db.session.delete(existing_record_project)
+            if not record_exists:
+                new_record = ModelRecord(
+                user_id = user_id,
+                date_rec = date_rec,
+                )
+                    
+                db.session.add(new_record)
+                hoursRecords[recordkey]=hours
+
+            else:
+                if recordkey not in hoursRecords:
+                    
+                    existing_record_projects=db.session.query(ModelRecordProjects).filter(
+                                            ModelRecordProjects.user_id == user_id,
+                                            ModelRecordProjects.date_rec == date_rec).all()
+                    for rp in existing_record_projects:
+                        db.session.delete(rp)
+                    hoursRecords[recordkey]=hours
+                else:
+                    hoursRecords[recordkey]+=hours
 
             
-        new_record_project = ModelRecordProjects(
-            user_id = user_id,
-            date_rec = date_rec,
-            project_id = project_id,
-            domain = domain,
-            declared_hours = hours)
+            new_record_project = ModelRecordProjects(
+                        user_id = user_id,
+                        date_rec = date_rec,
+                        project_id = project_id,
+                        domain = domain,
+                        declared_hours = hours)
             
-            
-        db.session.add(new_record_project)
-    db.session.commit()
-    return {"message": "Import successful."}
+                
+                
+            db.session.add(new_record_project)
+        
+        all_lower = all(value == 35 for value in hoursRecords.values())
+        
+        if not all_lower:
+            raise HTTPException(status_code=400, detail="Some lines do not sum 35 hours per week. Please check your input")
+        
+        
+        db.session.commit()
+        return {"message": "Import successful."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid input, please try again")
+
+
+    
 
     
 # 2.3 Add project
 @app.post("/api/project")
-async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], forecasts: List[SchemaMonthlyForecast]):
+async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], forecasts: List[SchemaMonthlyForecast], user = Depends(get_user)):
 
     existing_code = db.session.query(ModelProject).filter(ModelProject.project_code == project.project_code).first() 
     
@@ -765,9 +795,9 @@ async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], 
 getprojectmodel={'project': SchemaProject,
             "phases":List[SchemaProjectPhase]} 
 
-# 2.3.1 Get project /*/
+# 2.4 Get project /*/
 @app.get("/api/project")
-async def get_project_with_phases(projectcode: str):
+async def get_project_with_phases(projectcode: str, user = Depends(get_user)):
     
     modelproject =db.session.query(ModelProject).filter(
         ModelProject.project_code == projectcode
@@ -833,9 +863,9 @@ async def get_project_with_phases(projectcode: str):
 
 
 
-# 2.4 Modify project
+# 2.5 Modify project
 @app.put("/api/project")
-async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase], forecasts: List[SchemaMonthlyForecast]):
+async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase], forecasts: List[SchemaMonthlyForecast], user = Depends(get_user)):
            
     searched_project = db.session.query(ModelProject).filter(ModelProject.id == project.id).first()
 
@@ -915,7 +945,7 @@ async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase
     return {"message": "Project updated"}
 
 
-# 2.5 Delete project
+# 2.6 Delete project
 @app.delete("/api/project")
 async def delete_project(project_code: str, user: SchemaHoursUserBase = Depends(get_user)):
       
@@ -958,99 +988,9 @@ async def delete_project(project_code: str, user: SchemaHoursUserBase = Depends(
    
     return {"message": message}
 
-# 2.6 Add project phase
-@app.post("/api/phase")
-async def add_phase(phase: SchemaProjectPhase, projectcode: str):
-    
-    try:
-        projectid = getattr(db.session.query(ModelProject).filter(ModelProject.project_code == projectcode).first(),"id")
-    
-    except Exception as e :
-        raise HTTPException(status_code=400, detail="Invalid project code")
-    
-        
-    
-    
-    db_phase = ModelProjectPhase(
-            project_id = projectid,
-            project_phase = phase.project_phase,
-            start_date = phase.start_date,
-            end_date = phase.end_date,
-            records=0
-            )
-    
-    db.session.add(db_phase)
-    db.session.commit()
-
-    update_project_phase_hours(projectid)
-    
-    return {"message": "Phase registered successfully"}
-
-# 2.7 Change project phase
-@app.put("/api/phase")
-async def change_phase(phase: SchemaProjectPhase, projectcode: str):
-
-    projectid = getattr(db.session.query(ModelProject).filter(ModelProject.project_code == projectcode).first(),"id")
-
-    if not projectid:
-        raise HTTPException(status_code=400, detail="Project not found")
-
-    searched_phase = db.session.query(ModelProjectPhase).filter(
-        ModelProjectPhase.project_id == projectid,
-        ModelProjectPhase.project_phase == phase.project_phase).first()
-    
-    if not searched_phase:
-        raise HTTPException(status_code=400, detail="Phase not found")
-    
-    searched_phase.project_id = projectid,
-    searched_phase.project_phase = phase.project_phase,
-    searched_phase.start_date = phase.start_date,
-    searched_phase.end_date = phase.end_date,
-
-    db.session.commit()
-
-    update_project_phase_hours(projectid)
-    
-    return {"message": "Phase modified successfully"}
-
-# 2.8 Delete project phase
-@app.delete("/api/phase")
-async def delete_phase(phase: int, projectcode: str):
-
-    projectid = getattr(db.session.query(ModelProject).filter(ModelProject.project_code == projectcode).first(),"id")
-
-    if not projectid:
-        raise HTTPException(status_code=400, detail="Project not found")
-
-    searched_phase = db.session.query(ModelProjectPhase).filter(
-        ModelProjectPhase.project_id == projectid,
-        ModelProjectPhase.project_phase == phase).first()
-    
-    if not searched_phase:
-        raise HTTPException(status_code=400, detail="Phase not found")
-    
-    message="Phase not deleted. Please erase the records associated to the phase first."
-    
-    records_in_phase=db.session.query(ModelRecordProjects).filter(
-        ModelRecordProjects.project_id == projectid,
-        ModelRecordProjects.date_rec >= searched_phase.start_date,
-        ModelRecordProjects.date_rec <= searched_phase.end_date
-    ).first()
-        
-    if not records_in_phase:
-        db.session.delete(searched_phase)
-        message="Phase deleted."
-
-    update_project_phase_hours(projectid)
-        
-    db.session.commit()
-
-
-    return {"message": message}
-
 # KPIs
 
-# 2.9. KPI pie chart
+# 2.7. KPI pie chart
 @app.get("/api/kpi/pie/hours_by_domain")
 async def kpi_piedomainhours( project_id: int, 
         unit: str, 
@@ -1129,7 +1069,7 @@ async def kpi_piedomainhours( project_id: int,
         ]
     }
 
-#2.10 KPI Line graph
+#2.8 KPI Line graph
 @app.get("/api/kpi/line/hour_expenditure")
 async def kpi_linehours(
         project_id: int, 
@@ -1138,7 +1078,8 @@ async def kpi_linehours(
         month1: Optional[int] = None,
         year1: Optional[int] = None,
         month2: Optional[int] = None,
-        year2: Optional[int] = None
+        year2: Optional[int] = None,
+        user: SchemaHoursUserBase = Depends(get_user)
     ):
     
     cond=False
@@ -1286,7 +1227,7 @@ async def kpi_linehours(
     
     return ans
 
-#2.11 KPI Stacked bar chart
+#2.9 KPI Stacked bar chart
 @app.get("/api/kpi/stackedbar/hour_expenditure_by_project")
 async def kpi_stackedbar(        
         project_id: int,
@@ -1329,13 +1270,14 @@ async def kpi_stackedbar(
         'legend':{'data':phases}
     }
 
-#2.12 Data tab: see data
+#2.10 See data
 @app.post("/api/data")
 async def see_data(month1: Optional[int] = None,
         year1: Optional[int] = None,
         month2: Optional[int] = None,
         year2: Optional[int] = None,
-        projects: Optional[List[int]] = None):
+        projects: Optional[List[int]] = None,
+        user: SchemaHoursUserBase = Depends(get_user)):
     
     if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
         raise HTTPException(status_code=400, detail="Invalid month and year input")
@@ -1410,7 +1352,7 @@ async def see_data(month1: Optional[int] = None,
 
 #3.1. Get monthly hours
 @app.get("/api/monthlyhours",response_model=List[SchemaMonthlyModifiedHours])
-async def get_monthly_hours(month:int, year:int):
+async def get_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = Depends(get_user)):
     
     # Getting the current date and time
     
@@ -1453,7 +1395,7 @@ async def get_monthly_hours(month:int, year:int):
 
 #3.2. Modify monthly hours
 @app.put("/api/monthlyhours")
-async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaMonthlyModifiedHours]):
+async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaMonthlyModifiedHours], user: SchemaHoursUserBase = Depends(get_user)):
     
     dateM=datetime.date(year,month,1)
 
@@ -1476,7 +1418,7 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
                     project_id = project["project_id"],
                     month = dateM,
                     total_hours = project["hours"],
-                    domain = user["domain"]
+                    domain = change.domain
                 )
         
                 db.session.add(db_monthlyhour)
@@ -1491,9 +1433,9 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
     return {"message":"Hours modified successfully"}
 
 
-#3.3. Update monthly hours' table
+#3.3. Reset monthly hours' table
 @app.post("/api/monthlyhours")
-async def update_monthly_hours(month:int, year:int):
+async def update_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = Depends(get_user)):
     
     dateM=datetime.date(year,month,1)
 
@@ -1533,6 +1475,7 @@ async def update_monthly_hours(month:int, year:int):
     ).group_by(
         ModelRecordProjects.user_id,
         ModelRecordProjects.project_id,
+        ModelRecordProjects.domain,
         func.date_trunc('month', dateM)
     ).all()
     
@@ -1556,7 +1499,7 @@ async def update_monthly_hours(month:int, year:int):
 
 
 
-#3.4. Business KPIs: capitalization summary pie
+#3.4. Business KPIs, capitalization summary pie
 
 @app.get("/api/business_kpi/pie/cap_summary")
 async def businesskpi_piecapsummary(
@@ -1564,7 +1507,8 @@ async def businesskpi_piecapsummary(
         month1: Optional[int] = None,
         year1: Optional[int] = None,
         month2: Optional[int] = None,
-        year2: Optional[int] = None):
+        year2: Optional[int] = None,
+        user: SchemaHoursUserBase = Depends(get_user)):
     
     if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
         raise HTTPException(status_code=400, detail="Invalid month and year input")
@@ -1615,7 +1559,7 @@ async def businesskpi_piecapsummary(
     .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
     .filter(ModelMonthlyModifiedHours.month >= dateM,
             ModelMonthlyModifiedHours.month <= dateFin,
-            ModelProject.project_code != 'ABS').first()
+            ModelProject.sub_category != 'ABS').first()
     
     tot_hours = tot_hours_query.hours
     
@@ -1703,7 +1647,7 @@ async def businesskpi_piecapsummary(
 
 
 
-#3.5. Business KPIs: capitalization summary bar
+#3.5. Business KPIs, capitalization summary bar
 
 @app.get("/api/business_kpi/bar/cap_summary")
 async def businesskpi_barcapsummary(
@@ -1711,7 +1655,8 @@ async def businesskpi_barcapsummary(
         month1: Optional[int] = None,
         year1: Optional[int] = None,
         month2: Optional[int] = None,
-        year2: Optional[int] = None):
+        year2: Optional[int] = None,
+        user: SchemaHoursUserBase = Depends(get_user)):
     
 
     if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
@@ -1762,7 +1707,7 @@ async def businesskpi_barcapsummary(
     .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
     .filter(ModelMonthlyModifiedHours.month >= dateM,
             ModelMonthlyModifiedHours.month <= dateFin,
-            ModelProject.project_code != 'ABS') \
+            ModelProject.sub_category != 'ABS') \
     .group_by(ModelProject.sub_category) \
     .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
     .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
@@ -1810,7 +1755,8 @@ async def businesskpi_linenoncapsummary(
         month1: Optional[int] = None,
         year1: Optional[int] = None,
         month2: Optional[int] = None,
-        year2: Optional[int] = None):
+        year2: Optional[int] = None,
+        user: SchemaHoursUserBase = Depends(get_user)):
 
     if (month1 is None and year1 is not None) or (month1 is not None and year1 is None) or (month2 is None and year2 is not None) or (month2 is not None and year2 is None):
         raise HTTPException(status_code=400, detail="Invalid month and year input")
@@ -1863,7 +1809,7 @@ async def businesskpi_linenoncapsummary(
         .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
         .filter(ModelMonthlyModifiedHours.month >= dateM,
                 ModelMonthlyModifiedHours.month <= dateFin,
-                ModelProject.project_code != 'ABS')\
+                ModelProject.sub_category != 'ABS')\
         .group_by(ModelMonthlyModifiedHours.month)\
         .order_by(ModelMonthlyModifiedHours.month)
     
@@ -1878,7 +1824,7 @@ async def businesskpi_linenoncapsummary(
         CAP_hours_query = db.session.query(ModelMonthlyModifiedHours.month,func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
         .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
         .filter(ModelMonthlyModifiedHours.month == date,
-                ModelProject.project_code != 'ABS',
+                ModelProject.sub_category != 'ABS',
                 and_(
                     ModelProject.start_cap_date.isnot(None),
                     ModelProject.start_cap_date <= date,
@@ -1922,7 +1868,7 @@ async def businesskpi_linenoncapsummary(
 
     return ans
 
-#3.7. Business KPIs: line
+#3.7. Business KPIs, line
 @app.get("/api/business_kpi/line/hour_expenditure")
 async def businesskpi_linehours(
         cumulative:bool, 
@@ -2031,14 +1977,15 @@ async def businesskpi_linehours(
         }
     }
 
-#3.8. Business KPIs: pie
+#3.8. Business KPIs, pie
 @app.get("/api/business_kpi/pie/hours_by_domain")
 async def businesskpi_piedomainhours(
     unit: str, 
     month1: Optional[int] = None,
     year1: Optional[int] = None,
     month2: Optional[int] = None,
-    year2: Optional[int] = None):
+    year2: Optional[int] = None,
+    user: SchemaHoursUserBase = Depends(get_user)):
 
     start_date = None
     end_date = None
@@ -2095,7 +2042,7 @@ async def businesskpi_piedomainhours(
 
 #3.9. Get users
 @app.get("/api/getusers")
-async def get_all_users():
+async def get_all_users(user: SchemaHoursUserBase = Depends(get_user)):
     ans=[]
     users =db.session.query(ModelHoursUser).all()
     if not users:
@@ -2105,7 +2052,8 @@ async def get_all_users():
         db_user={
             "name": user.username,
             "id": user.id,
-            "email":user.email}
+            "email":user.email,
+            "domain":user.domain}
         
         ans.append(db_user)
     return ans
@@ -2114,16 +2062,20 @@ async def get_all_users():
 @app.get("/api/export_monthly")
 async def export_monthly(month:int, year:int):
     dateM=datetime.date(year,month,1)
-    
+
+    temp_filename='./temp/exportModified.csv'
+
     query = db.session.query(ModelMonthlyModifiedHours.total_hours.label('buffer'),
                         ModelProject.project_code.label('project_code'),
                         ModelHoursUser.username.label('name'),
                         ModelMonthlyModifiedHours.month.label('month'),
+                        ModelMonthlyModifiedHours.domain.label('domain'),
                         ModelMonthlyModifiedHours.total_hours.label('hours'))\
     .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id,isouter=True)\
     .join(ModelHoursUser, ModelHoursUser.id == ModelMonthlyModifiedHours.user_id,isouter=True)\
     .filter(ModelMonthlyModifiedHours.month == dateM)\
-    .order_by(ModelProject.project_code,ModelHoursUser.username)
+    .filter(ModelMonthlyModifiedHours.total_hours != 0)\
+        .order_by(ModelProject.project_code,ModelHoursUser.username)
 
     if not query:
         raise HTTPException(status_code=401, detail="No records for inputted month")
@@ -2132,9 +2084,10 @@ async def export_monthly(month:int, year:int):
                     "name",
                     "month",
                     "year",
-                    "hours"]
+                    "hours",
+                    "domain"]
 
-    csv_data = csv.DictWriter(open("exportModified.csv","w"), fieldnames=column_names,delimiter=";")
+    csv_data = csv.DictWriter(open(temp_filename,"w"), fieldnames=column_names,delimiter=";")
     csv_data.writeheader()
     
     for row in query:
@@ -2149,12 +2102,320 @@ async def export_monthly(month:int, year:int):
             "hours":row.hours}      
         csv_data.writerow(row_data)
 
-    async with aiofiles.open("exportModified.csv", mode="r") as f:
+    async with aiofiles.open(temp_filename, mode="r") as f:
         contents = await f.read()
 
 
-    return FileResponse("exportModified.csv", filename="exportModified.csv")
+    return FileResponse(temp_filename, filename=temp_filename)
 
+#3.11. Export project capitalization summary
+@app.get("/api/export/monthly_project_capitalization")
+async def export_monthly_project_capitalization(month:int, year:int,user: SchemaHoursUserBase = Depends(get_user)):
+    
+    dateM=datetime.date(year,month,1)
+
+    wb=openpyxl.Workbook()
+    sheet=wb.active
+    ft1 = Font(size=16,
+                bold=True)
+    ft2 = Font(size=16)
+    ft3 = Font(color="00FFFFFF",bold=True)
+
+
+    fl1 = PatternFill(start_color="00000000",end_color="00000000",fill_type="solid")
+
+    if month < 10: month='0'+str(month)
+    sheet.title = str(month)+" - "+str(year)
+
+    a1 = sheet.cell(row = 1, column= 1)
+    a1.value = "R&D TDE/CAP"
+    a1.font = ft1
+
+    #Headers
+    sheet.cell(row = 1, column= 2).value= str(month)+"/"+str(year)
+    sheet.cell(row = 3, column= 1).value= "Project code"
+    sheet.cell(row = 3, column= 2).value= "Project name"
+    sheet.cell(row = 3, column= 3).value= "Sub-category"
+    sheet.cell(row = 3, column= 4).value= "TDE in hours"
+    sheet.cell(row = 3, column= 5).value= "CAP"
+    sheet.cell(row = 3, column= 6).value= "Cap in hours"
+    sheet.cell(row = 2, column= 9).value= "Capitalization summary"
+    sheet.cell(row = 3, column= 9).value= "Capitalized hours"
+    sheet.cell(row = 4, column= 9).value= "Division"
+    sheet.cell(row = 4, column= 10).value= "Division name"
+    sheet.cell(row = 4, column= 12).value= "Capitalized hours"
+    
+    sheet.cell(row = 3, column= 1).font= ft3
+    sheet.cell(row = 3, column= 2).font= ft3
+    sheet.cell(row = 3, column= 3).font= ft3
+    sheet.cell(row = 3, column= 4).font= ft3
+    sheet.cell(row = 3, column= 5).font= ft3
+    sheet.cell(row = 3, column= 6).font= ft3
+    sheet.cell(row = 2, column= 9).font= ft1
+    sheet.cell(row = 3, column= 9).font= Font(bold=True)
+    sheet.cell(row = 4, column= 9).font= ft3
+    sheet.cell(row = 4, column= 10).font= ft3
+    sheet.cell(row = 4, column= 12).font= ft3
+
+    sheet.cell(row = 3, column= 1).fill= fl1
+    sheet.cell(row = 3, column= 2).fill= fl1
+    sheet.cell(row = 3, column= 3).fill= fl1
+    sheet.cell(row = 3, column= 4).fill= fl1
+    sheet.cell(row = 3, column= 5).fill= fl1
+    sheet.cell(row = 3, column= 6).fill= fl1
+    sheet.cell(row = 4, column= 9).fill= fl1
+    sheet.cell(row = 4, column= 10).fill= fl1
+    sheet.cell(row = 4, column= 11).fill= fl1
+    sheet.cell(row = 4, column= 12).fill= fl1
+
+    sheet.cell(row = 1, column= 2).alignment = Alignment(horizontal="right")
+    sheet.cell(row = 1, column= 2).font = ft2
+
+    sheet.column_dimensions['A'].width = 18.64
+    sheet.column_dimensions['B'].width = 43
+    sheet.column_dimensions['C'].width = 18.36
+    sheet.column_dimensions['D'].width = 12.91
+    sheet.column_dimensions['E'].width = 8.27
+    sheet.column_dimensions['F'].width = 13.18
+    sheet.column_dimensions['G'].width = 8.27
+    sheet.column_dimensions['H'].width = 11
+    sheet.column_dimensions['I'].width = 13.45
+    sheet.column_dimensions['J'].width = 28.45
+    sheet.column_dimensions['K'].width = 17.91
+    sheet.column_dimensions['L'].width = 17.91
+    
+    table_by_project= db.session.query(ModelProject.id, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month == dateM,
+                ModelProject.sub_category != 'ABS')\
+    .group_by(ModelProject.id)\
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+
+    if not table_by_project:
+        raise HTTPException(status_code=401, detail="No records for inputted month")
+
+
+    row_projects=4
+    
+    for row in table_by_project:
+        line=db.session.query(ModelProject).filter(ModelProject.id == row.id).first()
+        
+        if(
+            (line.start_cap_date is not None and line.start_cap_date <= dateM and (line.end_cap_date is None or line.end_cap_date > dateM))
+        ):
+            capnum=1
+        else: capnum=0
+
+        sheet.cell(row = row_projects, column= 1).value= line.project_code 
+        sheet.cell(row = row_projects, column= 2).value= line.project_name 
+        sheet.cell(row = row_projects, column= 3).value= line.sub_category 
+        sheet.cell(row = row_projects, column= 4).value= row.hours
+        sheet.cell(row = row_projects, column= 5).value= capnum 
+        sheet.cell(row = row_projects, column= 6).value= float(row.hours)*float(capnum)
+        row_projects+=1
+    
+    cap_table_by_division= db.session.query(ModelProject.division, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month == dateM,
+            or_(
+                and_(
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= dateM,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > dateM))))\
+    .group_by(ModelProject.division) \
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+    divisionnames={"HOME":"Home (Except headphone)",
+                   "PRO":"Pro (Except headphone)",
+                   "HEADSET":"Headphone: Home, Pro",
+                   "MOTORITIES":"All motorities"}
+
+    row_other=5
+    totsum1=0
+
+    for row in cap_table_by_division:
+        sheet.cell(row = row_other, column= 9).value=row.division
+        sheet.cell(row = row_other, column= 10).value=divisionnames.get(row.division,"")
+        sheet.cell(row = row_other, column= 12).value=row.hours
+        row_other+=1
+        totsum1+=row.hours
+
+    sheet.cell(row = row_other, column= 9).value="Subtotal"
+    sheet.cell(row = row_other, column= 9).font=Font(bold=True)
+
+    sheet.cell(row = row_other, column= 12).value=totsum1
+    sheet.cell(row = row_other, column= 12).font=Font(bold=True)
+
+
+    """Part 2"""
+    
+    FCS_hours_query = db.session.query(func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month == dateM,
+                ModelProject.project_code == 'FCS')
+        
+    
+    ETC_hours_query = db.session.query(func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month == dateM,
+                ModelProject.sub_category == 'ETC',
+                ModelProject.project_code != 'FCS')
+        
+    
+    TOT_hours_query = db.session.query(func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+        .join(ModelProject, ModelProject.id == ModelMonthlyModifiedHours.project_id)\
+        .filter(ModelMonthlyModifiedHours.month == dateM,
+                ModelProject.sub_category != 'ABS')
+
+    fcs=0
+    etc=0
+    tot=0
+
+    for row in FCS_hours_query:fcs=row.hours
+    for row in ETC_hours_query:etc=row.hours
+    for row in TOT_hours_query:tot=row.hours
+
+    if not tot: tot = 0
+    if not etc: etc = 0
+    if not fcs: fcs = 0
+
+    row_other+=3
+
+    sheet.cell(row = row_other, column= 9).value="Non-capitalized hours"
+    sheet.cell(row = row_other, column= 9).font=Font(bold=True)
+
+    row_other+=1
+
+    sheet.cell(row = row_other, column= 9).value="Category name"
+    sheet.cell(row = row_other, column= 9).font=ft3
+    sheet.cell(row = row_other, column= 9).fill=fl1
+
+    sheet.cell(row = row_other, column= 10).fill=fl1
+
+    sheet.cell(row = row_other, column= 11).fill=fl1
+
+    sheet.cell(row = row_other, column= 12).value="Non-cap hours"
+    sheet.cell(row = row_other, column= 12).font=ft3
+    sheet.cell(row = row_other, column= 12).fill=fl1
+
+    row_other+=1
+    
+
+    sheet.cell(row = row_other, column= 9).value="Non-capitalized projects (in Concept)"
+    sheet.cell(row = row_other, column= 12).value=tot-fcs-etc-totsum1
+    
+
+    row_other+=1
+    
+    sheet.cell(row = row_other, column= 9).value="Engineering change/Production support"
+    sheet.cell(row = row_other, column= 12).value=fcs
+    
+
+    row_other+=1
+
+    sheet.cell(row = row_other, column= 9).value="Management/Research/Regulation/ISIT/etc"
+    sheet.cell(row = row_other, column= 12).value=etc
+
+    row_other+=1
+
+    sheet.cell(row = row_other, column= 9).value="Subtotal"
+    sheet.cell(row = row_other, column= 9).font=Font(bold=True)
+
+    sheet.cell(row = row_other, column= 12).value=tot-totsum1
+    sheet.cell(row = row_other, column= 12).font=Font(bold=True)
+
+    row_other+=2
+
+    sheet.cell(row = row_other, column= 9).value="Total"
+    sheet.cell(row = row_other, column= 9).font=Font(bold=True)
+
+    sheet.cell(row = row_other, column= 12).value=tot
+    sheet.cell(row = row_other, column= 12).font=Font(bold=True)
+
+    row_other+=3
+
+    cap_table_by_subcategory= db.session.query(ModelProject.sub_category, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month == dateM,
+            or_(
+                and_(
+                    ModelProject.start_cap_date.isnot(None),
+                    ModelProject.start_cap_date <= dateM,
+                    or_(ModelProject.end_cap_date.is_(None), ModelProject.end_cap_date > dateM))))\
+    .group_by(ModelProject.sub_category) \
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+    tot_table_by_subcategory= db.session.query(ModelProject.sub_category, func.sum(ModelMonthlyModifiedHours.total_hours).label('hours'))\
+    .join(ModelMonthlyModifiedHours, ModelProject.id == ModelMonthlyModifiedHours.project_id, isouter=True)\
+    .filter(ModelMonthlyModifiedHours.month == dateM,
+            ModelProject.sub_category != 'ABS') \
+    .group_by(ModelProject.sub_category) \
+    .having(func.sum(ModelMonthlyModifiedHours.total_hours) != 0) \
+    .order_by(func.sum(ModelMonthlyModifiedHours.total_hours).desc())
+
+
+
+    sheet.cell(row = row_other, column= 9).font=ft1
+    sheet.cell(row = row_other, column= 9).value="Dev effort / Cap hours by sub categories"
+    row_other+=1
+    sheet.cell(row = row_other, column= 9).value="Sub-category"
+    sheet.cell(row = row_other, column= 9).font=ft3
+    sheet.cell(row = row_other, column= 9).fill=fl1
+
+    sheet.cell(row = row_other, column= 10).value="Category name"
+    sheet.cell(row = row_other, column= 10).font=ft3
+    sheet.cell(row = row_other, column= 10).fill=fl1
+
+    sheet.cell(row = row_other, column= 11).value="Dev effort"
+    sheet.cell(row = row_other, column= 11).font=ft3
+    sheet.cell(row = row_other, column= 11).fill=fl1
+
+    sheet.cell(row = row_other, column= 12).value="Capitalization"
+    sheet.cell(row = row_other, column= 12).font=ft3
+    sheet.cell(row = row_other, column= 12).fill=fl1
+
+    row_other+=1
+    dict_caps={row.sub_category:row.hours for row in cap_table_by_subcategory}
+    
+    subcatnames={"H_CI":"Home CI",
+                   "H_LSP":"Home Loudspeaker",
+                   "H_HP":"Home Headphone",
+                   "H_AMP":"Home Amplifier",
+                   "M_CAR":"Motorities Car",
+                   "M_MAR":"Motorities Marine",
+                   "M_OEM":"Motorities OEM",
+                   "P_LSP":"Pro Loudspeaker",
+                   "P_HP":"Pro Headphone",
+                   "ETC":"Others"}
+    
+
+
+    for row in tot_table_by_subcategory:
+        sheet.cell(row = row_other, column= 9).value=row.sub_category
+        sheet.cell(row = row_other, column= 10).value=subcatnames.get(row.sub_category,"")
+        sheet.cell(row = row_other, column= 11).value=row.hours
+        sheet.cell(row = row_other, column= 12).value=dict_caps.get(row.sub_category,0)
+        
+        row_other+=1
+
+    row_other+=1
+
+    sheet.cell(row = row_other, column= 9).value="Total"
+    sheet.cell(row = row_other, column= 9).font=Font(bold=True)
+
+    sheet.cell(row = row_other, column= 11).value=tot
+    sheet.cell(row = row_other, column= 11).font=Font(bold=True)
+
+    sheet.cell(row = row_other, column= 12).value=totsum1
+    sheet.cell(row = row_other, column= 12).font=Font(bold=True)
+
+    temp_filename = "exctest.xlsx"
+    wb.save(filename=temp_filename)
+    return FileResponse(temp_filename, filename=temp_filename)
 
 #___________________________________________________________________________________________
 
