@@ -340,7 +340,9 @@ async def get_records(hours_user_id: int, user: SchemaHoursUserBase = Depends(ge
         rec_projects = []
 
         record_projects = db.session.query(ModelRecordProjects).filter(ModelRecordProjects.user_id == hours_user_id,
-                                                                       ModelRecordProjects.date_rec == record.date_rec).all()
+                                                                       ModelRecordProjects.date_rec == record.date_rec,
+                                                                       ModelRecordProjects.declared_hours != 0,
+                                                                       ).all()
 
         for project in record_projects:
             rec_proj = SchemaRecordProjects(
