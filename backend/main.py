@@ -1,38 +1,31 @@
 #General library imports
-from typing import Union, Annotated, Optional, List
-import json
+from typing import Union, Optional, List
 import base64
 import os
-import uvicorn
 import datetime
 from datetime import date, timedelta
 import csv
 import aiofiles
-import requests
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
 from copy import copy
 
 
 #Import FastAPI dependencies
-from fastapi import Depends, FastAPI , HTTPException, File, UploadFile, status
+from fastapi import Depends, FastAPI , HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_sqlalchemy import DBSessionMiddleware,db
-from fastapi.security import OAuth2PasswordBearer
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 #Import SQLAlchemy dependencies
-from sqlalchemy import func, desc, text, asc, case, Date, and_, or_
-
+from sqlalchemy import func, desc, text, case, Date, and_, or_
+from auth_utils import get_user
 
 #Import libraries for token decryption
-from jose import jwt, jws, jwk
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from decimal import Decimal
 
 #Import schemas from schemas.py
 from schemas import HoursUserBase as SchemaHoursUserBase
-from schemas import HoursUser as SchemaHoursUser
 from schemas import BufferDailyRegister as SchemaBufferDailyRegister
 from schemas import FrontEndUser as SchemaFrontEndUser
 from schemas import Project as SchemaProject
@@ -59,23 +52,10 @@ from dotenv import load_dotenv
 
 
 load_dotenv(".env")
-DISCOVERY_URL = os.getenv("DISCOVERY_URL")
 
 
 app = FastAPI()
 
-# Fetch the Azure public key
-def get_azure_public_key():
-    response=requests.get(DISCOVERY_URL)
-    if response.status_code == 200:
-         data = response.json()
-         print(data)
-    else:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch public keys")
-
-
-#OAuthScheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl = "token")
 
 def get_db():
     db=SessionLocal()
@@ -128,58 +108,6 @@ def wrap_jwk_public_key(jwk):
 
 
 
-# Authentication Middleware
-async def test_auth (token: str = Depends(oauth2_scheme)):
-    response=requests.get(DISCOVERY_URL)
-    data = response.json()
-    public_keys_uri = data
-    public_keys = requests.get(public_keys_uri["jwks_uri"]).json()
-
-    header = jwt.get_unverified_header(token)
-    kid = header.get("kid")
-    alg = header.get("alg")
-
-    key = next(key for key in public_keys["keys"] if key["kid"] == kid)
-    modulus = base64.urlsafe_b64decode(key["n"] + "==")
-    exponent_bytes = base64.urlsafe_b64decode(key["e"] + "==")
-    exponent = int.from_bytes(exponent_bytes, byteorder="big", signed=False)
-    mod = int.from_bytes(modulus, byteorder="big", signed=False)
-
-    # Construct RSA public key
-    public_numbers = rsa.RSAPublicNumbers(exponent, mod)
-    public_key = public_numbers.public_key()
-
-    # Serialize the RSA public key to PEM format
-    pem_public_key = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    )
-
-    # Convert bytes to string and remove leading/trailing whitespaces
-    pem_public_key_str = pem_public_key.decode("utf-8").strip()
-    
-    verif = jws.verify(token,pem_public_key,alg)
-    #decoded_token = jwt_payload_decode(token)
-    return pem_public_key_str
-
-
-
-
-async def get_user (token: str = Depends(oauth2_scheme)):
-    try:
-        decoded_token = jwt_payload_decode(token)
-        username = decoded_token['name']
-        email = decoded_token['unique_name']
-    
-        user=db.session.query(ModelHoursUser).filter(ModelHoursUser.username  == username,
-                                                     ModelHoursUser.email  == email).first()
-
-        return SchemaHoursUserBase(username=user.username,
-                               email = user.email)
-    except Exception as e :
-        return {'details':'Invalid token'}
-        raise e
-
 #Root message
 @app.get("/")
 def read_root():
@@ -190,18 +118,12 @@ def read_root():
 #____________________________________________________________________________________________________
 
 
-@app.get("/api/usertest")
-async def get_usertest(user = Depends(test_auth)):
-    return user
-
-
 # 1.1 Get user
 @app.get("/api/user")
 async def get_hours_user(user: SchemaHoursUserBase = Depends(get_user)):
     
     if not user:
             raise HTTPException(status_code=400, detail="User not found")
-    
     model_user=db.session.query(ModelHoursUser).filter(ModelHoursUser.username  == user.username,
                                                      ModelHoursUser.email  == user.email).first()
 
@@ -262,41 +184,41 @@ async def insert_record(record: SchemaRecord, record_projects: List[SchemaRecord
     db_projects = []
     hourcount = 0.0
     
-    for project in record_projects:
+    for record_project in record_projects:
       
-        if not project_exists(project.project_id):
+        if not project_exists(record_project.project_id):
             raise HTTPException(status_code=404,detail="Project not found")
         
         existing_project = db.session.query(ModelRecordProjects).filter(
             ModelRecordProjects.user_id == record.user_id,
             ModelRecordProjects.date_rec == record.date_rec,
-            ModelRecordProjects.project_id == project.project_id
+            ModelRecordProjects.project_id == record_project.project_id
         ).first()
 
         if existing_project:
             raise HTTPException(status_code=409, detail="User has already filled hours for this project in this week")
 
-        if not project.declared_hours == 0.0:
+        if not record_project.declared_hours == 0.0:
             db_project = ModelRecordProjects(
                 user_id = record.user_id,
                 date_rec = record.date_rec,
-                project_id = project.project_id,
-                declared_hours = project.declared_hours,
-                domain = project.domain
+                project_id = record_project.project_id,
+                declared_hours = record_project.declared_hours,
+                domain = record_project.domain
             )
             db_projects.append(db_project)
 
             searchedPhase=db.session.query(ModelProjectPhase).filter(
-                ModelProjectPhase.project_id == project.project_id,
+                ModelProjectPhase.project_id == record_project.project_id,
                 ModelProjectPhase.start_date <= record.date_rec,
                 ModelProjectPhase.end_date >= record.date_rec).first()
             
             if searchedPhase:
-                searchedPhase.hours += project.declared_hours
+                searchedPhase.hours += Decimal(record_project.declared_hours)
 
             
         
-        hourcount += project.declared_hours
+        hourcount += record_project.declared_hours
    
     if hourcount != 35.0:
             raise HTTPException(status_code=400,detail="Hour count does not match required value")
@@ -311,7 +233,6 @@ async def insert_record(record: SchemaRecord, record_projects: List[SchemaRecord
     for buffer_record in searched_records:
         db.session.delete(buffer_record)
 
-    
  
     db.session.add_all(db_projects)
     db.session.add(db_record)
@@ -1444,7 +1365,7 @@ async def update_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = 
     if month == 12:
         dateFin = datetime.date(year + 1, 1, 1)
     else:
-        dateFin = datetime.date(year, month + 1, 2)
+        dateFin = datetime.date(year, month + 1, 1)
 
 
  
@@ -1473,7 +1394,8 @@ async def update_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = 
             ).label('total_hours')
         ).filter(
             ModelRecordProjects.date_rec >= dateM,
-            ModelRecordProjects.date_rec <= dateFin
+            ModelRecordProjects.date_rec <= dateFin,
+            ModelRecordProjects.declared_hours != 0,
     ).group_by(
         ModelRecordProjects.user_id,
         ModelRecordProjects.project_id,
@@ -1492,7 +1414,6 @@ async def update_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = 
                 total_hours = row.total_hours,
                 domain = row.domain
                 )
-        
         db.session.add(db_monthlyhour)
         db.session.commit()
 
@@ -2527,20 +2448,6 @@ def convert_to_seconddaystr(input_date):
     # Reformat the date to 'YYYY-MM' format
     output_date = f"{parts[0]}-{parts[1]}-02"
     return output_date
-
-def _b64_decode(data):
-    data += '=' * (4 - len(data) % 4)
-    return base64.b64decode(data).decode('utf-8')
-
-def jwt_payload_decode(jwt):
-    _, payload, _ = jwt.split('.')
-    return json.loads(_b64_decode(payload))
-
-def jwt_header_decode(jwt):
-    header, _, _ = jwt.split('.')
-    return json.loads(_b64_decode(header))
-
-
 
 #add: change monthly hours from csv. Made for one-time convenience; no need for implementation.
 @app.put("/api/import-csv-monthly")
