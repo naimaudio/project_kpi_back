@@ -1277,43 +1277,46 @@ async def see_data(month1: Optional[int] = None,
 @app.get("/api/monthlyhours",response_model=List[SchemaMonthlyModifiedHours])
 async def get_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = Depends(get_user)):
     
-    # Getting the current date and time
     
-    ans=[]
+    response=[]
+    # Get the current date and time
     
     dateM=datetime.date(year,month,1)
 
+    # Get users who have filled there hours for the current month
     filtered_users=db.session.query(ModelMonthlyModifiedHours.user_id).filter(ModelMonthlyModifiedHours.month == dateM).distinct().all()
     
     for user in filtered_users:
+        
         
         username = getattr(db.session.query(ModelHoursUser).filter(ModelHoursUser.id == user.user_id).first(),"username")
         tothours=0.0
         hourslist=[]
         dom="General"
 
+        # Get monthly records
         records_with_user=db.session.query(ModelMonthlyModifiedHours).filter(ModelMonthlyModifiedHours.month == dateM,
                                                                              ModelMonthlyModifiedHours.user_id == user.user_id)
 
+        # Get monthly records
         for record in records_with_user:
             if record.total_hours:
                 tothours = record.total_hours
             if not record.total_hours == 0:
-                dom = record.domain
                 proj={"project_id":record.project_id,
-                    "hours":record.total_hours}
-                hourslist.append(proj)               
+                    "hours":record.total_hours,
+                    "domain": record.domain}
+                hourslist.append(proj)
                 
         if tothours != 0.0:
             sch=SchemaMonthlyModifiedHours(
                 user_id=user.user_id,
                 user_name=username,
-                domain = dom,
                 hours=hourslist
             )
-            ans.append(sch)
+            response.append(sch)
 
-    return ans
+    return response
 
 
 #3.2. Modify monthly hours
@@ -1328,27 +1331,22 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
 
 
         for project in change.hours:
-            searched_record=db.session.query(ModelMonthlyModifiedHours).filter(
+            searched_records=db.session.query(ModelMonthlyModifiedHours).filter(
                 ModelMonthlyModifiedHours.project_id==project["project_id"],
                 ModelMonthlyModifiedHours.month==dateM,
-                ModelMonthlyModifiedHours.user_id==user_id).first()
-            
-            if not searched_record:
-                user=db.session.query(ModelMonthlyModifiedHours).filter(ModelMonthlyModifiedHours.user_id==user_id).first()
-                
-                db_monthlyhour = ModelMonthlyModifiedHours(
-                    user_id = user_id,
-                    project_id = project["project_id"],
-                    month = dateM,
-                    total_hours = project["hours"],
-                    domain = change.domain
-                )
+                ModelMonthlyModifiedHours.user_id==user_id)
+            if searched_records:
+                for rec in searched_records:
+                    db.session.delete(rec)
+            db_monthlyhour = ModelMonthlyModifiedHours(
+                user_id = user_id,
+                project_id = project["project_id"],
+                month = dateM,
+                total_hours = project["hours"],
+                domain = project["domain"]
+            )
         
-                db.session.add(db_monthlyhour)
-            
-            
-            else:
-                searched_record.total_hours = project["hours"]
+            db.session.add(db_monthlyhour)
             
             db.session.commit()
     
@@ -2336,7 +2334,7 @@ async def export_monthly_project_capitalization(month:int, year:int,user: Schema
     sheet.cell(row = row_other, column= 12).value=totsum1
     sheet.cell(row = row_other, column= 12).font=Font(bold=True)
 
-    temp_filename = "exctest.xlsx"
+    temp_filename = "./temp/exctest.xlsx"
     wb.save(filename=temp_filename)
     return FileResponse(temp_filename, filename=temp_filename)
 
@@ -2486,8 +2484,3 @@ async def import_csv_monthly(file: UploadFile = File(...)):
 
     db.session.commit()
     return {"message": "Import successful."}
-
-
-
-
-
