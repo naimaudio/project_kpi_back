@@ -34,7 +34,7 @@ class Project(Base):
     end_cap_date = Column(DateTime, nullable=False)
     start_date = Column(DateTime)
     end_date = Column(DateTime)
-    
+    status = Column(String)
     
 
 class Record(Base):
@@ -79,19 +79,19 @@ class ProjectPhase(Base):
 
 class MonthlyModifiedHours(Base):
     __tablename__ = "monthly_modified_hours"
-    
+
     user_id = Column(Integer, ForeignKey("hoursuser.id"), primary_key = True)
     project_id = Column(Integer, ForeignKey("project.id"), primary_key = True)
     month = Column(DateTime,nullable=False, primary_key = True)
     total_hours = Column(Numeric(precision=3,scale=1))
-    domain = Column(String, nullable=False)
+    domain = Column(String, nullable=False, primary_key = True)
 
-class MonthlyForecast(Base):
-    __tablename__ = "monthly_forecast"
-    
+class ProjectMonthlyInformation(Base):
+    __tablename__ = "project_monthly_information"
     project_id = Column(Integer, ForeignKey("project.id"), primary_key = True)
     month = Column(DateTime,nullable=False, primary_key = True)
-    hours = Column(Numeric(precision=3,scale=1))
+    forecast_hours = Column(Numeric(precision=3,scale=1))
+    capitalizable = Column(String, nullable=True)
   
 
 class Favorites(Base):
@@ -101,4 +101,11 @@ class Favorites(Base):
         
     project_id = Column(Integer, ForeignKey("project.id"))
     user_id = Column(Integer, ForeignKey("hoursuser.id"))
+    
+class MonthlyReport(Base):
+    __tablename__ = "monthly_report"
+
+    sync_date = Column(DateTime,nullable=True)
+    closed = Column(Boolean, nullable=False)
+    month = Column(DateTime,nullable=False, primary_key=True)
     

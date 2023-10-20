@@ -22,7 +22,8 @@ class HoursUser(HoursUserBase):
     role: Optional[str]
     view: Optional[bool]
     date_entrance: Optional[date]
-    
+    division: str
+    status: str
     class Config:
             orm_mode = True
 
@@ -43,6 +44,7 @@ class Project (BaseModel):
     end_cap_date: Optional[date]
     start_date: Optional[date]
     end_date: Optional[date]
+    status: str
 
     class Config:
           orm_mode = True
@@ -108,13 +110,23 @@ class ProjectPhase(FrontendProjectPhase):
 class MonthlyModifiedHours(BaseModel):
     user_id : int
     user_name: Optional[str]
-    domain: str
+    """List which has the following signature :
+                    {"project_id": number,
+                    "hours": number,
+                    "domain": domain}
+    """
     hours: list
 
 
-class MonthlyForecast(BaseModel):
-        
+class ProjectMonthlyInformation(BaseModel):
     project_id: Optional[int]
     month: int
     year: int
-    hours: float
+    forecast_hours: float
+    capitalizable: Optional[bool]
+
+class MonthlyReport(BaseModel):
+    sync_date: Optional[date]
+    closed: bool
+    month: date
+    
