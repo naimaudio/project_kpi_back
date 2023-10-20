@@ -34,7 +34,7 @@ from schemas import RecordProjects as SchemaRecordProjects
 from schemas import Favorites as SchemaFavorites
 from schemas import FrontendProjectPhase as SchemaProjectPhase
 from schemas import MonthlyModifiedHours as SchemaMonthlyModifiedHours
-from schemas import MonthlyForecast as SchemaMonthlyForecast
+from schemas import ProjectMonthlyInformation as SchemaProjectMonthlyInformation
 
 #Import models from models.py
 from models import HoursUser as ModelHoursUser
@@ -45,7 +45,7 @@ from models import Favorites as ModelFavorites
 from models import BufferDailyRegister as ModelBufferDailyRegister
 from models import ProjectPhase as ModelProjectPhase
 from models import MonthlyModifiedHours as ModelMonthlyModifiedHours
-from models import MonthlyForecast as ModelMonthlyForecast
+from models import ProjectMonthlyInformation as ModelProjectMonthlyInformation
 
 from database import SessionLocal
 from dotenv import load_dotenv
@@ -656,7 +656,7 @@ async def import_csv(file: UploadFile = File(...)):
     
 # 2.3 Add project
 @app.post("/api/project")
-async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], forecasts: List[SchemaMonthlyForecast], user = Depends(get_user)):
+async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], project_monthly_information: List[SchemaProjectMonthlyInformation], user = Depends(get_user)):
 
     existing_code = db.session.query(ModelProject).filter(ModelProject.project_code == project.project_code).first() 
     
@@ -676,7 +676,8 @@ async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], 
         start_cap_date = project.start_cap_date,
         end_cap_date = project.end_cap_date,
         start_date = project.start_date,
-        end_date = project.end_date
+        end_date = project.end_date,
+        status = project.status
         )
     
     db.session.add(db_project)
@@ -694,26 +695,35 @@ async def add_project(project: SchemaProject, phases: List[SchemaProjectPhase], 
         
         db.session.add(db_phase)
     
-    for forecast in forecasts:
-        
-        if forecast.month is not None and forecast.year is not None:
-            forecast_date = datetime.date(forecast.year, forecast.month, 1)
+    for info in project_monthly_information:
+        if info.month is not None and info.year is not None:
+            p_info_date = datetime.date(info.year, info.month, 1)
         else:
             raise HTTPException(status_code=400, detail="Invalid date") 
 
-
-        db_forecast = ModelMonthlyForecast(
+        db_project_monthly_info = ModelProjectMonthlyInformation(
             project_id = projectid,
-            month = forecast_date,
-            hours = forecast.hours
+            month = p_info_date,
+            forecast_hours = info.forecast_hours,
+            capitalizable = info.capitalizable
             )
-        
-        db.session.add(db_forecast)
+        db.session.add(db_project_monthly_info)
 
     db.session.commit()
     
     return {'message: Project with phases added successfully'}
 
+# 2.3 Change project state
+@app.put("/api/project/change_state")
+async def change_project_state(project_id: int, status: str):
+
+    edited_project = db.session.query(ModelProject).filter(ModelProject.id == project_id).first() 
+    if not edited_project:
+        raise HTTPException(status_code=400, detail="Project id doesn't exist")
+    edited_project.status = status
+    db.session.commit()
+
+    return {'message: Project state successfully updated'}
 
 getprojectmodel={'project': SchemaProject,
             "phases":List[SchemaProjectPhase]} 
@@ -743,7 +753,8 @@ async def get_project_with_phases(projectcode: str, user = Depends(get_user)):
         start_cap_date = modelproject.start_cap_date,
         end_cap_date = modelproject.end_cap_date,
         start_date = modelproject.start_date,
-        end_date = modelproject.end_date
+        end_date = modelproject.end_date,
+        status = modelproject.status,
     )
 
     phases_ans=[]
@@ -763,32 +774,33 @@ async def get_project_with_phases(projectcode: str, user = Depends(get_user)):
             )
             phases_ans.append(frontend_phase)
 
-    forecasts_ans=[]
+    p_monthly_infos_ans=[]
 
-    forecasts = db.session.query(ModelMonthlyForecast).filter(
-        ModelMonthlyForecast.project_id == projectid
+    p_monthly_infos = db.session.query(ModelProjectMonthlyInformation).filter(
+        ModelProjectMonthlyInformation.project_id == projectid
     )
     
-    if forecasts:
-        for forecast in forecasts:
-            frontend_forecast=SchemaMonthlyForecast(
+    if p_monthly_infos:
+        for p_monthly_info in p_monthly_infos:
+            frontend_p_monthly_info=SchemaProjectMonthlyInformation(
                 project_id = projectid,
-                month = forecast.month.month,
-                year = forecast.month.year,
-                hours = forecast.hours
+                month = p_monthly_info.month.month,
+                year = p_monthly_info.month.year,
+                forecast_hours = p_monthly_info.forecast_hours,
+                capitalizable = p_monthly_info.capitalizable,
             )
-            forecasts_ans.append(frontend_forecast)
+            p_monthly_infos_ans.append(frontend_p_monthly_info)
 
 
     return {'project': project,
             "phases":phases_ans,
-            "forecasts":forecasts_ans} 
+            "monthly_informations":p_monthly_infos_ans} 
 
 
 
 # 2.5 Modify project
 @app.put("/api/project")
-async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase], forecasts: List[SchemaMonthlyForecast], user = Depends(get_user)):
+async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase], project_monthly_informations: List[SchemaProjectMonthlyInformation], user = Depends(get_user)):
            
     searched_project = db.session.query(ModelProject).filter(ModelProject.id == project.id).first()
 
@@ -841,26 +853,27 @@ async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase
 
     update_project_phase_hours(project.id)
 
-    searched_forecasts = db.session.query(ModelMonthlyForecast).filter(
-        ModelMonthlyForecast.project_id == project.id)
+    searched_p_m_infos = db.session.query(ModelProjectMonthlyInformation).filter(
+        ModelProjectMonthlyInformation.project_id == project.id)
     
-    for searched_forecast in searched_forecasts:
-        db.session.delete(searched_forecast)
+    for searched_p_m_info in searched_p_m_infos:
+        db.session.delete(searched_p_m_info)
 
-    for forecast in forecasts:
+    for p_m_infos in project_monthly_informations:
 
-        if forecast.month is not None and forecast.year is not None:
-            forecast_date = datetime.date(forecast.year, forecast.month, 1)
+        if p_m_infos.month is not None and p_m_infos.year is not None:
+            p_m_infos_date = datetime.date(p_m_infos.year, p_m_infos.month, 1)
         else:
             raise HTTPException(status_code=400, detail="Invalid date") 
 
-        db_forecast = ModelMonthlyForecast(
+        db_p_m_info = ModelProjectMonthlyInformation(
             project_id = project.id,
-            month = forecast_date,
-            hours = forecast.hours
+            month = p_m_infos_date,
+            hours = p_m_infos.forecast_hours,
+            capitalizable = p_m_infos.capitalizable
             )
     
-        db.session.add(db_forecast)
+        db.session.add(db_p_m_info)
     
     db.session.commit()
 
@@ -891,14 +904,14 @@ async def delete_project(project_code: str, user: SchemaHoursUserBase = Depends(
     if not records_in_project:
         
         to_delete_phases = db.session.query(ModelProjectPhase).filter(ModelProjectPhase.project_id == project_id).all()
-        to_delete_forecasts = db.session.query(ModelMonthlyForecast).filter(ModelMonthlyForecast.project_id == project_id).all()
+        to_delete_p_m_infos = db.session.query(ModelProjectMonthlyInformation).filter(ModelProjectMonthlyInformation.project_id == project_id).all()
         
         for phase in to_delete_phases:
             db.session.delete(phase)
             db.session.commit()
 
-        for forecast in to_delete_forecasts:
-            db.session.delete(forecast)
+        for p_m_info in to_delete_p_m_infos:
+            db.session.delete(p_m_info)
             db.session.commit()
 
         db.session.delete(searched_project)
@@ -1007,11 +1020,11 @@ async def kpi_linehours(
     
     cond=False
 
-    forecasts = db.session.query(func.to_char(func.DATE_TRUNC('month', ModelMonthlyForecast.month), 'YYYY-MM-DD').label('month'),ModelMonthlyForecast.hours).filter(
-            ModelMonthlyForecast.project_id == project_id).all()
+    p_m_infos = db.session.query(func.to_char(func.DATE_TRUNC('month', ModelProjectMonthlyInformation.month), 'YYYY-MM-DD').label('month'),ModelProjectMonthlyInformation.forecast_hours).filter(
+            ModelProjectMonthlyInformation.project_id == project_id).all()
 
-    if forecasts:
-        dateList=[row.month for row in forecasts]
+    if p_m_infos:
+        dateList=[row.month for row in p_m_infos]
         first_date=dateList[0]
         last_date=convert_to_seconddaystr(dateList[-1])
     else:
@@ -1059,8 +1072,8 @@ async def kpi_linehours(
     realdata={date:hours for date, hours in zip(dates,hours)}
     realHours=[]
 
-    fvalues=[forecast.hours for forecast in forecasts]
-    fdates=[convert_to_monthstr(forecast.month) for forecast in forecasts]
+    fvalues=[p_m_info.forecast_hours for p_m_info in p_m_infos]
+    fdates=[convert_to_monthstr(p_m_info.month) for p_m_info in p_m_infos]
 
     
 
@@ -2151,7 +2164,7 @@ async def export_monthly_project_capitalization(month:int, year:int,user: Schema
 
     divisionnames={"HOME":"Home (Except headphone)",
                    "PRO":"Pro (Except headphone)",
-                   "HEADSET":"Headphone: Home, Pro",
+                   "HEADPHONE":"Headphone: Home, Pro",
                    "MOTORITIES":"All motorities"}
 
     row_other=5
