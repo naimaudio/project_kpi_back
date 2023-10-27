@@ -1,18 +1,19 @@
 from typing import Optional, Union
 from pydantic import BaseModel, validator
-from datetime import date
+from datetime import date, datetime
 
 class HoursUserBase(BaseModel):
     email: str
     username: str
+    role: str
 
 class FrontEndUser(HoursUserBase):
     id : int
     domain: Optional[str]
-    role: Optional[str]
+    role: str
     view: Optional[bool]
     date_entrance: Optional[date]
-    
+    status: str
     class Config:
             orm_mode = True
 
@@ -126,7 +127,7 @@ class ProjectMonthlyInformation(BaseModel):
     capitalizable: Optional[bool]
 
 class MonthlyReport(BaseModel):
-    sync_date: Optional[date]
+    sync_date: Optional[datetime]
     closed: bool
     month: date
     

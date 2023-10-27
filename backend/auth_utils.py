@@ -56,7 +56,8 @@ async def get_user (token: str = Depends(oauth2_scheme)):
                                                      ModelHoursUser.email  == email).first()
 
         return SchemaHoursUserBase(username=user.username,
-                               email = user.email)
+                               email = user.email,
+                               role=user.role)
     except Exception as e :
         raise HTTPException(status_code=401, detail="User not found")
 

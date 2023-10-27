@@ -16,6 +16,7 @@ class HoursUser(Base):
     role = Column(String, nullable=False)
     view = Column(Boolean, nullable=False)
     date_entrance = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False)
 
 class Project(Base):
     __tablename__ = "project"

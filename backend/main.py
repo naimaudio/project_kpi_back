@@ -35,6 +35,7 @@ from schemas import Favorites as SchemaFavorites
 from schemas import FrontendProjectPhase as SchemaProjectPhase
 from schemas import MonthlyModifiedHours as SchemaMonthlyModifiedHours
 from schemas import ProjectMonthlyInformation as SchemaProjectMonthlyInformation
+from schemas import MonthlyReport as SchemaMonthlyReport
 
 #Import models from models.py
 from models import HoursUser as ModelHoursUser
@@ -46,6 +47,7 @@ from models import BufferDailyRegister as ModelBufferDailyRegister
 from models import ProjectPhase as ModelProjectPhase
 from models import MonthlyModifiedHours as ModelMonthlyModifiedHours
 from models import ProjectMonthlyInformation as ModelProjectMonthlyInformation
+from models import MonthlyReport as ModelMonthlyReport
 
 from database import SessionLocal
 from dotenv import load_dotenv
@@ -134,7 +136,8 @@ async def get_hours_user(user: SchemaHoursUserBase = Depends(get_user)):
         domain=model_user.domain,
         role=model_user.role,
         view=model_user.view,
-        date_entrance=model_user.date_entrance)
+        date_entrance=model_user.date_entrance,
+        status=model_user.status)
 
     return frontenduser
 
@@ -318,7 +321,18 @@ async def change_record(record:SchemaRecord, record_projects:List[SchemaRecordPr
 # 1.6 Get projects /*/
 @app.get("/api/projects",response_model=List[SchemaProject])
 async def get_projects(user = Depends(get_user)):
-    projects =db.session.query(ModelProject).all()
+    # THE FOLLOWING LINE IS FOCAL NAIM SPECIFIC, if you want to extract the project KPI software to other organizations, please implement the function : 
+    #   filter projects which organization (entity) is one of the organization of the user. For Focal Naim, the name of organization is in email
+    
+    if (user.role == 'Business Manager'):
+        projects =db.session.query(ModelProject).all()
+    else:
+        org = []
+        if ('focal' in user.email):
+            org.append('FOCAL')
+        if ('naim' in user.email):
+            org.append('NAIM')
+        projects =db.session.query(ModelProject).filter(ModelProject.entity.in_(org)).all()
     if not projects:
             raise HTTPException(status_code=404,detail="No projects on database")
     return projects
@@ -1384,6 +1398,14 @@ async def update_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = 
         ModelMonthlyModifiedHours.month == dateM
     ).all()
 
+    monthly_report= db.session.query(ModelMonthlyReport).filter(
+        ModelMonthlyReport.month == dateM
+    ).first()
+    print(monthly_report.sync_date)
+    if (monthly_report):
+        monthly_report.sync_date = datetime.datetime.now()
+        db.session.commit()
+
     if existingMonthlyHours:
         for rec in existingMonthlyHours:
             db.session.delete(rec)
@@ -1987,7 +2009,7 @@ async def get_all_users(user: SchemaHoursUserBase = Depends(get_user)):
             "name": user.username,
             "id": user.id,
             "email":user.email,
-            "domain":user.domain}
+            "status": user.status}
         
         ans.append(db_user)
     return ans
@@ -2497,3 +2519,61 @@ async def import_csv_monthly(file: UploadFile = File(...)):
 
     db.session.commit()
     return {"message": "Import successful."}
+
+
+
+# Get monthly_report /*/
+@app.get("/api/monthly_report")
+async def get_monthly_report(month: int, year: int, user = Depends(get_user)):
+    
+    model_monthly_report =db.session.query(ModelMonthlyReport).filter(
+        ModelMonthlyReport.month == f'{year}-{month}-01'
+    ).first()
+
+    if not model_monthly_report:
+            raise HTTPException(status_code=404,detail="Monthly report does not exist")
+    print(model_monthly_report.sync_date)
+    ans = SchemaMonthlyReport(
+        month=model_monthly_report.month,
+        closed=model_monthly_report.closed,
+        sync_date=model_monthly_report.sync_date,
+    )
+
+    return ans
+
+# Post monthly_report /*/
+@app.post("/api/monthly_report")
+async def get_monthly_report(monthlyReport: SchemaMonthlyReport, user = Depends(get_user)):
+    
+    model_monthly_report =db.session.query(ModelMonthlyReport).filter(
+        ModelMonthlyReport.month == monthlyReport.month
+    ).first()
+
+    if model_monthly_report:
+            raise HTTPException(status_code=400,detail="Monthly report already exists")
+
+    model_monthly_report = ModelMonthlyReport(
+        month=monthlyReport.month,
+        closed=monthlyReport.closed,
+        sync_date=monthlyReport.sync_date,
+    )
+
+    db.session.add(model_monthly_report)
+    db.session.commit()
+    return {"message": "Monthly report created successfully."}
+
+#  Change state monthly_report
+@app.put("/api/monthly_report")
+async def get_monthly_report(month: int, year: int, close: bool, user = Depends(get_user)):
+    
+
+    model_monthly_report =db.session.query(ModelMonthlyReport).filter(
+        ModelMonthlyReport.month == f'{year}-{month}-01'
+    ).first()
+
+    if not model_monthly_report:
+            raise HTTPException(status_code=404,detail="Monthly report does not exist")
+
+    model_monthly_report.closed = close
+    db.session.commit()
+    return {"message": "Monthly report state successfully changed."}
