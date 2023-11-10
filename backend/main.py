@@ -814,7 +814,7 @@ async def get_project_with_phases(projectcode: str, user = Depends(get_user)):
 
 # 2.5 Modify project
 @app.put("/api/project")
-async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase], project_monthly_informations: List[SchemaProjectMonthlyInformation], user = Depends(get_user)):
+async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase], monthly_informations: List[SchemaProjectMonthlyInformation], user = Depends(get_user)):
            
     searched_project = db.session.query(ModelProject).filter(ModelProject.id == project.id).first()
 
@@ -873,7 +873,7 @@ async def update_project(project: SchemaProject, phases: List[SchemaProjectPhase
     for searched_p_m_info in searched_p_m_infos:
         db.session.delete(searched_p_m_info)
 
-    for p_m_infos in project_monthly_informations:
+    for p_m_infos in monthly_informations:
 
         if p_m_infos.month is not None and p_m_infos.year is not None:
             p_m_infos_date = datetime.date(p_m_infos.year, p_m_infos.month, 1)
@@ -1295,6 +1295,34 @@ async def see_data(month1: Optional[int] = None,
     return ans
 
 
+#2.11 Export projects
+@app.get("/api/projects/export")
+async def get_projects():
+    wb = openpyxl.Workbook()
+    organizations = os.environ['ORGANIZATIONS'].split(',')
+    widths = [3,13,13,13,13,13,40,10]
+    for org in organizations:
+        ws = wb.create_sheet(org) 
+        modelprojects =db.session.query(ModelProject).filter(ModelProject.entity == org)
+        ws.append([])
+        ws.append([None,'Project Code','Division','Sub category','Classification','Expansion/Renewal','Project name','Status'])
+        i = 0
+        for modelproject in modelprojects:
+            ws.append([None,modelproject.project_code,modelproject.division,modelproject.sub_category,modelproject.classification, modelproject.type, modelproject.project_name,modelproject.status])
+            i += 1
+        
+        for j in range(0,len(widths)):
+            ws.column_dimensions[openpyxl.utils.cell.get_column_letter(j+1)].width = widths[j]
+
+        style = openpyxl.worksheet.table.TableStyleInfo(name="TableStyleMedium2", showRowStripes=True,showFirstColumn=False,
+                       showLastColumn=False, showColumnStripes=False)
+        tab = openpyxl.worksheet.table.Table(displayName=f"ProjectMasterList{org}", ref=f"B2:H{i+2}")
+        tab.tableStyleInfo = style
+        ws.add_table(tab)
+    del wb['Sheet']
+    temp_filename = "./temp/projects_export.xlsx"
+    wb.save(filename=temp_filename)
+    return FileResponse(temp_filename, filename=temp_filename)
 
 
 # PART 3: METHODS FOR THE BUSINESS MANAGER PROFILE
@@ -2532,7 +2560,6 @@ async def get_monthly_report(month: int, year: int, user = Depends(get_user)):
 
     if not model_monthly_report:
             raise HTTPException(status_code=404,detail="Monthly report does not exist")
-    print(model_monthly_report.sync_date)
     ans = SchemaMonthlyReport(
         month=model_monthly_report.month,
         closed=model_monthly_report.closed,
@@ -2577,3 +2604,25 @@ async def get_monthly_report(month: int, year: int, close: bool, user = Depends(
     model_monthly_report.closed = close
     db.session.commit()
     return {"message": "Monthly report state successfully changed."}
+
+# Get monthly_report /*/
+@app.get("/api/projects/monthly-info")
+async def get_projects_monthly_infos(month: int, year: int, user = Depends(get_user)):
+    
+    model_monthly_info =db.session.query(ModelProjectMonthlyInformation).filter(
+        ModelProjectMonthlyInformation.month == f'{year}-{month}-01'
+    )
+
+    if not model_monthly_info:
+            raise HTTPException(status_code=404,detail="Projets monthly informations unreachable")
+    ans = []
+    for mmi in model_monthly_info:
+        ans.append(SchemaProjectMonthlyInformation(
+                project_id = mmi.project_id,
+                month = mmi.month.month,
+                year = mmi.month.year,
+                forecast_hours = mmi.forecast_hours,
+                capitalizable = mmi.capitalizable,
+        ))
+
+    return ans

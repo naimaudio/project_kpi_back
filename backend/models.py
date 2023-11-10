@@ -91,7 +91,7 @@ class ProjectMonthlyInformation(Base):
     __tablename__ = "project_monthly_information"
     project_id = Column(Integer, ForeignKey("project.id"), primary_key = True)
     month = Column(DateTime,nullable=False, primary_key = True)
-    forecast_hours = Column(Numeric(precision=3,scale=1))
+    forecast_hours = Column(Numeric(precision=3,scale=1), nullable=True)
     capitalizable = Column(String, nullable=True)
   
 

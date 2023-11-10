@@ -123,7 +123,7 @@ class ProjectMonthlyInformation(BaseModel):
     project_id: Optional[int]
     month: int
     year: int
-    forecast_hours: float
+    forecast_hours: Optional[float]
     capitalizable: Optional[bool]
 
 class MonthlyReport(BaseModel):
