@@ -36,7 +36,7 @@ from schemas import FrontendProjectPhase as SchemaProjectPhase
 from schemas import MonthlyModifiedHours as SchemaMonthlyModifiedHours
 from schemas import ProjectMonthlyInformation as SchemaProjectMonthlyInformation
 from schemas import MonthlyReport as SchemaMonthlyReport
-
+from schemas import MonthlyModifiedItems as SchemaMonthlyModifiedItems
 #Import models from models.py
 from models import HoursUser as ModelHoursUser
 from models import Project as ModelProject
@@ -1032,149 +1032,90 @@ async def kpi_linehours(
         user: SchemaHoursUserBase = Depends(get_user)
     ):
     
-    cond=False
-
-    p_m_infos = db.session.query(func.to_char(func.DATE_TRUNC('month', ModelProjectMonthlyInformation.month), 'YYYY-MM-DD').label('month'),ModelProjectMonthlyInformation.forecast_hours).filter(
+    # Get every month where there is info about forecast
+    # The forecast hours must be a successive array of months
+    hours_and_forecast_query = db.session.query(
+        ModelProjectMonthlyInformation.month.label('month'),
+        ModelProjectMonthlyInformation.forecast_hours.label('forecast_hours'),
+        ModelMonthlyModifiedHours.total_hours.label('hours')
+    ).outerjoin(ModelMonthlyModifiedHours, ModelMonthlyModifiedHours.month == ModelProjectMonthlyInformation.month
+           ).filter(
             ModelProjectMonthlyInformation.project_id == project_id).all()
 
-    if p_m_infos:
-        dateList=[row.month for row in p_m_infos]
-        first_date=dateList[0]
-        last_date=convert_to_seconddaystr(dateList[-1])
-    else:
-        date_query=db.session.query(
-                func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM-DD').label('month'),
-                func.sum(ModelRecordProjects.declared_hours).label('hours')
-            ).filter(ModelRecordProjects.project_id == project_id).group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec)).all()
-        dateList=[row.month for row in date_query]
-        first_date=dateList[0]
-        last_date=convert_to_seconddaystr(dateList[-1])
-
-
-
-    if month1 and year1:
-        start_date=datetime.date(year1,month1,1)
-        if month2 and year2:
-            end_date=datetime.date(year2,month2+1,2)
-        else:
-            end_date=last_date
-    elif month2 and year2:
-        end_date=datetime.date(year2,month2+1,2)
-        start_date=first_date
-    else:
-        start_date=first_date
-        end_date=last_date
-        cond=True
-     
-    result = (
-            db.session.query(
-                func.to_char(func.DATE_TRUNC('month', ModelRecordProjects.date_rec), 'YYYY-MM').label('date'),
-                func.sum(ModelRecordProjects.declared_hours).label('hours')
-            ).filter(ModelRecordProjects.project_id == project_id,
-                    ModelRecordProjects.date_rec >= start_date,
-                    ModelRecordProjects.date_rec <= end_date
-                    )
-            .group_by(func.DATE_TRUNC('month', ModelRecordProjects.date_rec))
-            .order_by(text("DATE_TRUNC('month', date_rec) ASC"))
-            .all()
-            )
-    
-    # Convert the result into a list of dictionaries
-    dates = [row.date for row in result]
-    hours = [row.hours for row in result]
-    
-    realdata={date:hours for date, hours in zip(dates,hours)}
-    realHours=[]
-
-    fvalues=[p_m_info.forecast_hours for p_m_info in p_m_infos]
-    fdates=[convert_to_monthstr(p_m_info.month) for p_m_info in p_m_infos]
-
-    
-
-    if cond:
-        realdates=fdates
-    else:
-        realdates=dates
-    
-
-    for date in realdates:
-        realHours.append(realdata.get(date,0))
+    # First date last date calculus
+    months=[]
+    hours=[]
+    forecast_hours=[]
+    for row in hours_and_forecast_query:
+        hours.append(row.month)
+        forecast_hours.append(row.forecast_hours)
+        months.append(row.month)
+    # Convert the result into a list of dictionaries    
+    print(hours)
+    converted_hours = hours.copy()
+    converted_forecast_hours = forecast_hours.copy()
 
     if(unit=='TDE'):
-        TDEs=[round(row/140,2) for row in realHours]
-        realHours=TDEs
+        TDEs=[round(row/140,2) for row in hours]
+        converted_hours=TDEs
     else:
         if not unit=='h':
             raise HTTPException(status_code=401, detail="Invalid units")
 
+    if(unit=='TDE'):
+        TDEs=[round(row/140,2) for row in forecast_hours]
+        converted_forecast_hours=TDEs
+    else:
+        if not unit=='h':
+            raise HTTPException(status_code=401, detail="Invalid units")
+        
 
     if cumulative:
         cumhours = []
         cumsum=0.0
-        for rhour in realHours:
+        for rhour in converted_hours:
             cumsum += float(rhour)
             cumhours.append(cumsum)
-        realHours=cumhours
-
-    realHours=[round(row,2) for row in realHours]
-
-
-    forecastVals={month:hours for month, hours in zip(fdates,fvalues)}
-    forecastHours=[]
-
-    for date in realdates:
-        forecastHours.append(forecastVals.get(date,0))
+        converted_hours=cumhours
 
     if cumulative:
         cumforehours = []
         cumforesum=0.0
-        for fhour in forecastHours:
+        for fhour in converted_forecast_hours:
             cumforesum += round(float(fhour),2)
             cumforehours.append(cumforesum)
-        forecastHours=cumforehours
+        converted_forecast_hours=cumforehours
 
 
+    converted_hours=[round(row,2) for row in converted_hours]
+    converted_forecast_hours = [round(row,2) for row in converted_forecast_hours]
+
+    # Format
     legend=["Spent"]    
     series= [
             {
-                "data": realHours,
+                "data": converted_hours,
                 "name": "Spent",
                 "type": 'line'
             }
-        ]
-
-    
-      
-        
-    
-    
-    if not(sum(forecastHours)==0):
-        if(unit=='TDE'):
-            TDEs=[round(row/140,2) for row in forecastHours]
-            forecastHours=TDEs
-        else:
-            if not unit=='h':
-                raise HTTPException(status_code=401, detail="Invalid units")
-            
+        ]    
+    if (sum(forecast_hours)!=0):
         series.append({
-            "data": forecastHours,
+            "data": converted_forecast_hours,
             "name": "Forecast",
             "type": 'line'
             }
             )
         legend.append("Forecast")
-
-
     ans= {
-        'unit':unit,
-        'xAxis': {"data":realdates},
+        'unit': unit,
+        'xAxis': {"data": months},
         'series': series,
         'legend': {
             'data': legend
         }
     }
 
-    
     return ans
 
 #2.9 KPI Stacked bar chart
@@ -1303,7 +1244,7 @@ async def get_projects():
     widths = [3,13,13,13,13,13,40,10]
     for org in organizations:
         ws = wb.create_sheet(org) 
-        modelprojects =db.session.query(ModelProject).filter(ModelProject.entity == org)
+        modelprojects =db.session.query(ModelProject)
         ws.append([])
         ws.append([None,'Project Code','Division','Sub category','Classification','Expansion/Renewal','Project name','Status'])
         i = 0
@@ -1362,7 +1303,7 @@ async def get_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = Dep
                     "hours":record.total_hours,
                     "domain": record.domain}
                 hourslist.append(proj)
-                
+
         if tothours != 0.0:
             sch=SchemaMonthlyModifiedHours(
                 user_id=user.user_id,
@@ -1376,11 +1317,11 @@ async def get_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = Dep
 
 #3.2. Modify monthly hours
 @app.put("/api/monthlyhours")
-async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaMonthlyModifiedHours], user: SchemaHoursUserBase = Depends(get_user)):
+async def change_monthly_hours(month:int, year:int, changed_records:SchemaMonthlyModifiedItems, user: SchemaHoursUserBase = Depends(get_user)):
     
     dateM=datetime.date(year,month,1)
 
-    for change in changed_records:
+    for change in changed_records.hours_items:
         user_id = getattr(db.session.query(ModelMonthlyModifiedHours).filter(
                 ModelMonthlyModifiedHours.user_id==change.user_id).first(),"user_id")
 
@@ -1400,13 +1341,29 @@ async def change_monthly_hours(month:int, year:int, changed_records:List[SchemaM
                 total_hours = project["hours"],
                 domain = project["domain"]
             )
-        
+
             db.session.add(db_monthlyhour)
             
             db.session.commit()
     
-   
-    return {"message":"Hours modified successfully"}
+    for m_i in changed_records.project_monthly_informations:
+    
+        searched_record=db.session.query(ModelProjectMonthlyInformation).filter(
+            ModelProjectMonthlyInformation.project_id==m_i.project_id,
+            ModelProjectMonthlyInformation.month==dateM).first()
+        if searched_record:
+            searched_record.capitalizable = m_i.capitalizable
+        else:
+            db_monthlyhour = ModelProjectMonthlyInformation(
+                project_id = m_i.project_id,
+                month = dateM,
+                capitalizable = m_i.capitalizable,
+            )
+
+            db.session.add(db_monthlyhour)
+        db.session.commit()
+
+    return {"message":"Monthly Hours Project modified successfully"}
 
 
 #3.3. Reset monthly hours' table
@@ -1455,7 +1412,7 @@ async def update_monthly_hours(month:int, year:int, user: SchemaHoursUserBase = 
             ).label('total_hours')
         ).filter(
             ModelRecordProjects.date_rec >= dateM,
-            ModelRecordProjects.date_rec <= dateFin,
+            ModelRecordProjects.date_rec < dateFin,
             ModelRecordProjects.declared_hours != 0,
     ).group_by(
         ModelRecordProjects.user_id,
@@ -2487,19 +2444,9 @@ def convert_date_to_month(input_date):
         output_date = input_date.strftime('%Y-%m')
         return output_date
 
-def convert_to_monthstr(input_date):
-    
-    
-    if(type(input_date)==str):
-        parts = input_date.split('-')
-        
-        
-        output_date = f"{parts[0]}-{parts[1]}"
-    
-    else:
-        output_date = input_date + timedelta(1)
-
-    return output_date
+def convert_to_monthstr(input_date: str):    
+    parts = input_date.split('-')        
+    return f"{parts[0]}-{parts[1]}"
 
 def convert_to_seconddaystr(input_date):
     

@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, List
 from pydantic import BaseModel, validator
 from datetime import date, datetime
 
@@ -126,8 +126,17 @@ class ProjectMonthlyInformation(BaseModel):
     forecast_hours: Optional[float]
     capitalizable: Optional[bool]
 
+class IncompleteProjectMonthlyInformation(BaseModel):
+    project_id: int
+    forecast_hours: Optional[float]
+    capitalizable: Optional[bool]
+
+
 class MonthlyReport(BaseModel):
     sync_date: Optional[datetime]
     closed: bool
     month: date
-    
+
+class MonthlyModifiedItems(BaseModel):
+    hours_items: List[MonthlyModifiedHours]
+    project_monthly_informations: List[IncompleteProjectMonthlyInformation]
